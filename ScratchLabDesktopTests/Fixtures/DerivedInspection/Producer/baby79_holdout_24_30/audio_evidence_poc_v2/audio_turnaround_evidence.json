@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 2,
+  "hardwareGroundTruth": false,
+  "canonicalReference": false,
+  "modifiesVisionTrajectory": false,
+  "source": {
+    "pocFolder": "/Users/user/Developer/ScratchLab-Platter-POC/baby79_holdout_24_30",
+    "reference": "reference.json",
+    "trajectory": "trajectory.csv",
+    "zip": "/Users/user/Developer/ScratchLab-Platter-POC/baby2.zip",
+    "angle": "angle_3",
+    "audioMember": "angle_3_noBeat.wav",
+    "audioRole": "noBeat",
+    "audioSemantics": "beat_removed_program_audio_may_include_speech"
+  },
+  "analysis": {
+    "startSeconds": 24.0,
+    "durationSeconds": 6.0,
+    "analysisFPS": 59.94005994005994,
+    "frameDurationMilliseconds": 16.683333333333334,
+    "audioSampleRate": 48000,
+    "audioDurationSeconds": 83.488,
+    "windowMilliseconds": 30.0,
+    "eventSearchFields": 5,
+    "localBaselineFields": 8,
+    "activityGate": {
+      "basis": "frozen_vision_direction_plus_turnaround_padding",
+      "padFields": 5,
+      "activeFrames": 265,
+      "totalFrames": 360,
+      "activeFraction": 0.7361111111111112
+    },
+    "audioNormalizationWithinGate": {
+      "p10Dbfs": -52.77161295756094,
+      "p90Dbfs": -24.684644134868893
+    }
+  },
+  "events": [
+    {
+      "visionFrame": 10,
+      "visionTimeSeconds": 24.166833333333333,
+      "kind": "FORWARD_TO_REVERSE",
+      "visionVelocityDegPerSecond": -19.20712,
+      "visualConfidence": 0.571962,
+      "audioEvidenceAvailability": "available",
+      "audioTroughFrame": 13,
+      "audioTroughTimeSeconds": 24.216883,
+      "audioTroughDeltaFields": 3,
+      "audioTroughDeltaMilliseconds": 50.05,
+      "audioTroughRMS": 0.0012801977903270838,
+      "audioLocalBaselineRMS": 0.04958832113514037,
+      "audioTroughRatio": 0.025816518103894463,
+      "relativeAudioTroughStrength": 0.9741834818961055
+    }
+  ]
+}

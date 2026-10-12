@@ -8,11 +8,11 @@ import SwiftUI
 
 struct ReferenceAuthoringView: View {
     @StateObject private var viewModel: ReferenceAuthoringViewModel
-    /// Observed because this route owns the visible hardware selectors as well
-    /// as the camera preview and live-notation data source. Device discovery
-    /// remains owned by `MacCaptureEngine`; this view only presents and applies
-    /// the operator's explicit choices.
-    @ObservedObject private var captureEngine: MacCaptureEngine
+    /// The full setup form needs current hardware state, not a new layout for
+    /// every hand, meter and playhead publication. Live leaves observe their
+    /// own data; form refreshes are coalesced without changing capture cadence.
+    private let captureEngine: MacCaptureEngine
+    @StateObject private var captureRefresh: ReferenceCaptureRefresh
     /// Optional because the DEBUG hardware route and focused view tests can
     /// run without a companion. Release injects the app-owned receiver, but
     /// nearby browsing remains off until the operator enables it in Setup.
@@ -36,8 +36,15 @@ struct ReferenceAuthoringView: View {
     /// a CHANGE is what makes one real release produce exactly one re-arm, and
     /// a replayed or duplicated value produce none.
     @State private var lastHandledMIDIWindowReleaseCount: Int?
+    @State private var isCaptureFocused: Bool
     @State private var isShowingMIDIAddressDiagnostics = false
-    @State private var selectedCapturePath: PhaseCapturePath? = nil
+    private var selectedCapturePath: PhaseCapturePath? { captureEngine.phaseCapturePath }
+    private var capturePathBinding: Binding<PhaseCapturePath?> {
+        Binding(get: { captureEngine.phaseCapturePath }, set: { path in
+            if path == .dvsThroughDJMS9 { _ = captureEngine.selectPhaseDVSInput() }
+            else { captureEngine.selectExistingCapturePath() }
+        })
+    }
     @State private var selectedMIDIProfileID = "automatic"
     /// Framing panel starts open — it is the thing being watched during a
     /// take — and can be folded away while configuring.
@@ -111,9 +118,13 @@ struct ReferenceAuthoringView: View {
     init(
         engine: MacCaptureEngine,
         companionReceiver: CompanionCameraReceiver?,
-        operatorName: String
+        operatorName: String,
+        startsInCaptureView: Bool = false
     ) {
-        _captureEngine = ObservedObject(wrappedValue: engine)
+        _isCaptureFocused = State(initialValue: startsInCaptureView)
+        captureEngine = engine
+        _captureRefresh = StateObject(wrappedValue: ReferenceCaptureRefresh(
+            changes: engine.objectWillChange.eraseToAnyPublisher()))
         self.companionReceiver = companionReceiver
         _viewModel = StateObject(
             wrappedValue: ReferenceAuthoringViewModel(
@@ -125,36 +136,21 @@ struct ReferenceAuthoringView: View {
     }
 
     var body: some View {
+        let _ = captureRefresh
         ScrollViewReader { scroll in
+        VStack(spacing: 0) {
+        if isCaptureFocused {
+            focusedCaptureContent
+        } else {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("SL Capture Reference Authoring")
-                    .font(.title2.weight(.semibold))
-                Text("Check one movement without a beat, or record four timed repetitions for reference review. Approval does not install or publish training data.")
-                    .foregroundStyle(.secondary)
-
-
-
-                messagePanel
-                savedDraftsSection
-                if !viewModel.isReviewingSavedDraft {
-                    stageHeading("Setup")
-                        .id(ReferenceAuthoringNavigationRequest.Destination.setup.rawValue)
-                    hardwareSetupSection
-                    setupSection
-                    calibrationSection
-                    preflightSection
-                    stageHeading("Capture")
-                        .id(ReferenceAuthoringNavigationRequest.Destination.capture.rawValue)
-                    recordingSection
-                }
-                stageHeading("Review & Export")
-                    .id(ReferenceAuthoringNavigationRequest.Destination.review.rawValue)
-                reviewSection
+            authoringFormContent
+        }
+        .onAppear {
+            if case .reviewing = viewModel.session.phase {
+                scroll.scrollTo(ReferenceAuthoringNavigationRequest.Destination.review.rawValue, anchor: .top)
             }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 20)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        }
         }
         .onChange(of: viewModel.navigationRequest) { _, request in
             guard let request else { return }
@@ -207,11 +203,14 @@ struct ReferenceAuthoringView: View {
         .onChange(of: viewModel.crossfaderOpenEndRawValue) { _, _ in
             viewModel.adoptPersistedCalibrationIfAvailable()
         }
-        .onChange(of: viewModel.session.phase == .recording) { _, _ in
+        .onChange(of: viewModel.session.phase == .recording) { _, isRecording in
             syncLiveNotationTracker(mode: resolvedLiveNotationMode)
+            if !isRecording, case .reviewing = viewModel.session.phase {
+                isCaptureFocused = false
+            }
         }
-        .onChange(of: captureEngine.isRoutineRecording) { wasRecording, isRecording in
-            if wasRecording && !isRecording { viewModel.captureRecordingDidStop() }
+        .onReceive(captureEngine.$isRoutineRecording.removeDuplicates().dropFirst().receive(on: DispatchQueue.main)) { isRecording in
+            if !isRecording { viewModel.captureRecordingDidStop() }
         }
         // A stopped take is not a finished one. It keeps ownership of the
         // engine's MIDI accumulation window until that window is RELEASED —
@@ -246,8 +245,40 @@ struct ReferenceAuthoringView: View {
             // `endLiveMIDICaptureIfIdle()` acts only while the PREVIEW owns
             // the MIDI window, decided under the engine's own lock.
             syncLiveNotationTracker(mode: .off)
+            captureEngine.disableCXLCameraGuide()
         }
         }
+    }
+
+    private var authoringFormContent: some View {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("SL Capture Reference Authoring")
+                    .font(.title2.weight(.semibold))
+                Text("Check one movement without a beat, or record four timed repetitions for reference review. Approval does not install or publish training data.")
+                    .foregroundStyle(.secondary)
+
+
+
+                messagePanel
+                savedDraftsSection
+                if !viewModel.isReviewingSavedDraft {
+                    stageHeading("Setup")
+                        .id(ReferenceAuthoringNavigationRequest.Destination.setup.rawValue)
+                    hardwareSetupSection
+                    setupSection
+                    calibrationSection
+                    preflightSection
+                    stageHeading("Capture")
+                        .id(ReferenceAuthoringNavigationRequest.Destination.capture.rawValue)
+                    recordingSection
+                }
+                stageHeading("Review & Export")
+                    .id(ReferenceAuthoringNavigationRequest.Destination.review.rawValue)
+                reviewSection
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 20)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func stageHeading(_ title: String) -> some View {
@@ -261,22 +292,23 @@ struct ReferenceAuthoringView: View {
     private var hardwareSetupSection: some View {
         GroupBox("Hardware inputs") {
             VStack(alignment: .leading, spacing: 10) {
-                Picker("Capture pathway", selection: $selectedCapturePath) {
+                Picker("Capture pathway", selection: capturePathBinding) {
                     Text("Existing hardware route").tag(nil as PhaseCapturePath?)
                     Text("Phase DVS + DJM-S9").tag(PhaseCapturePath.dvsThroughDJMS9 as PhaseCapturePath?)
                 }
                 .pickerStyle(.menu)
                 .disabled(hardwareSelectionIsLocked)
-                .onChange(of: selectedCapturePath) { _, path in
-                    guard path == .dvsThroughDJMS9 else { return }
-                    if !captureEngine.selectPhaseDVSInput() {
-                        selectedCapturePath = nil
-                    }
-                }
                 if selectedCapturePath == .dvsThroughDJMS9 {
                     Text(PhaseCapturePath.dvsThroughDJMS9.setupInstruction)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    HStack {
+                        Button("Connect Phase Input") { captureEngine.enablePhaseInput() }
+                        Button("Check Forward") { captureEngine.beginPhaseForwardCheck() }
+                        Button("Confirm Forward") { captureEngine.confirmPhaseForwardCheck() }
+                    }
+                    .disabled(hardwareSelectionIsLocked)
+                    Text(captureEngine.phaseInputStatus).font(.caption).foregroundStyle(.secondary)
                 }
 
                 Picker("MIDI source", selection: midiSourceSelectionBinding) {
@@ -438,7 +470,9 @@ struct ReferenceAuthoringView: View {
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
 
-                Text("This selects the audio device only. This screen does not yet prove a specific input pair or physical master-return signal.")
+                Text(selectedCapturePath == .dvsThroughDJMS9
+                    ? "Phase B: control tone on S9 USB 3/4; Serato programme on 5/6. Serato provides the scratch sound. Keep the verified mixer routing unchanged."
+                    : "This selects the audio device only. This screen does not yet prove a specific input pair or physical master-return signal.")
                     .font(.caption)
                     .foregroundStyle(.orange)
 
@@ -615,13 +649,15 @@ struct ReferenceAuthoringView: View {
     /// The internal scratch output actually feeding standalone capture.
     /// Raw Rane input activity remains a separate preflight signal.
     private var captureAudioMeter: some View {
-        let level = captureEngine.activeScratchOutputSignalLevel
+        TimelineView(.periodic(from: .now, by: 0.1)) { _ in
+        let isPhase = selectedCapturePath == .dvsThroughDJMS9
+        let level = isPhase ? captureEngine.phaseInputSnapshot()?.programmePeak : captureEngine.activeScratchOutputSignalLevel
         let litSegments = CXLScratchOutputMeter.litSegments(peak: level)
         let levelText = CXLScratchOutputMeter.label(peak: level)
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(captureEngine.scratchOutputSignalSourceLabel)
+                Text(isPhase ? "S9 programme input · USB 5/6" : captureEngine.scratchOutputSignalSourceLabel)
                     .font(.caption.weight(.semibold))
                 Spacer()
                 Text(levelText)
@@ -638,19 +674,40 @@ struct ReferenceAuthoringView: View {
                 }
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("ScratchLab AHHH output level")
+            .accessibilityLabel(isPhase ? "S9 programme input level" : "ScratchLab AHHH output level")
             .accessibilityValue(levelText)
 
-            if level == nil {
-                Text("Waiting for ScratchLab output. Load AHHH if no sample is loaded.")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
+            // This meter appears twice above Review. Inserting/removing its
+            // warning whenever callbacks go stale shifts the entire document,
+            // including controls that are currently below the viewport.
+            Text(level == nil
+                 ? (isPhase ? "Connect the Phase input to read programme audio." : "Waiting for ScratchLab output. Load AHHH if no sample is loaded.")
+                 : "Output meter is receiving samples.")
+                .font(.caption)
+                .foregroundStyle(level == nil ? Color.orange : Color.secondary)
+                .lineLimit(2, reservesSpace: true)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("cxl.capture.audioMeterStatus")
         }
         .accessibilityIdentifier("cxl.capture.audioMeter")
+        }
     }
 
+    private var phaseAudioOwnerContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Serato provides the scratch sound").font(.headline)
+            Text("Right deck: REL. Phase B RCA to S9 channel 2 LINE. SL Capture records control tone on USB 3/4 and programme audio on 5/6.")
+            Text("Use Serato to load and cue AHHH. Keep other decks and mixer effects out of this scratch-only return.")
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder
     private var scratchOutputRoutingControls: some View {
+        if selectedCapturePath == .dvsThroughDJMS9 {
+            phaseAudioOwnerContent
+        } else {
         VStack(alignment: .leading, spacing: 6) {
             Picker("AHHH output", selection: Binding(
                 get: { captureEngine.scratchPrimaryOutput },
@@ -702,6 +759,7 @@ struct ReferenceAuthoringView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         .accessibilityIdentifier("cxl.hardware.scratchOutputRouting")
+        }
     }
 
     private var videoInputSelectionBinding: Binding<String> {
@@ -784,7 +842,8 @@ struct ReferenceAuthoringView: View {
                 // loops, stops, reloads, or briefly loses its playback anchor.
                 dataSource: captureEngine.makeLivePerformedNotationDataSource(
                     includePlaybackLoopContext: false
-                )
+                ),
+                preparesCanonicalProjection: true
             )
         }
     }
@@ -816,14 +875,13 @@ struct ReferenceAuthoringView: View {
     /// cursor. Merely displaying it neither loads nor starts audio.
     @State private var selectedScratchSampleID = "dvs_ahhh"
 
+    @ViewBuilder
     private var samplePositionContent: some View {
+        if selectedCapturePath == .dvsThroughDJMS9 {
+            phaseAudioOwnerContent
+        } else {
         VStack(alignment: .leading, spacing: 6) {
-            MacSamplePositionWaveformView(
-                waveform: captureEngine.playbackWaveformSnapshot,
-                position: captureEngine.playbackPositionSnapshot,
-                positionLabel: "PLAYHEAD",
-                usesRenderedPlayhead: true
-            )
+            ReferenceCaptureWaveform(engine: captureEngine)
             .frame(height: 112)
 
             HStack {
@@ -857,6 +915,7 @@ struct ReferenceAuthoringView: View {
                 }
             }
         }
+        }
     }
 
     /// Camera framing + live performed notation.
@@ -869,10 +928,17 @@ struct ReferenceAuthoringView: View {
     /// `completeRoutineFinalization` reads. Camera guides configure the same
     /// measured image regions used by capture; live notation remains a preview.
     private var framingContent: some View {
+        captureBoard(cameraHeight: Self.captureBoardCameraHeight,
+                     notationHeight: Self.canonicalTearChartMinimumHeight,
+                     showsSetupControls: true)
+    }
+
+    private func captureBoard(cameraHeight: CGFloat, notationHeight: CGFloat,
+                              showsSetupControls: Bool) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
-                captureBoardTile("AHHH PLAYHEAD") {
-                    verticalSamplePositionContent
+                captureBoardTile(selectedCapturePath == .dvsThroughDJMS9 ? "SERATO AUDIO" : "AHHH PLAYHEAD") {
+                    verticalSamplePositionContent(cameraHeight: cameraHeight, showsSetupControls: showsSetupControls)
                 }
                 .frame(width: 132)
 
@@ -880,10 +946,21 @@ struct ReferenceAuthoringView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         CXLCameraCalibrationPreview(
                             captureEngine: captureEngine,
-                            previewHeight: Self.captureBoardCameraHeight,
-                            captureInProgress: viewModel.isWorking || viewModel.session.phase == .recording
+                            previewHeight: cameraHeight,
+                            captureInProgress: !showsSetupControls || viewModel.isWorking || viewModel.session.phase == .recording,
+                            showsCalibrationControls: showsSetupControls,
+                            keepsCameraGuideOnDisappear: true
                         )
-                        if !captureEngine.isCameraActive {
+                        .overlay {
+                            if !captureEngine.isCameraActive && !showsSetupControls {
+                                Text("Camera preview is not running. Return to setup to activate the selected camera.")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                                    .multilineTextAlignment(.center)
+                                    .padding()
+                            }
+                        }
+                        if showsSetupControls && !captureEngine.isCameraActive {
                             Text("Camera preview is not running. Recording is blocked until the selected camera is active.")
                                 .font(.caption)
                                 .foregroundStyle(.orange)
@@ -892,47 +969,56 @@ struct ReferenceAuthoringView: View {
                 }
                 .frame(maxWidth: .infinity)
 
+                if showsSetupControls || !captureEngine.secondaryCamera.selectedID.isEmpty {
                 captureBoardTile("IPHONE / SECOND CAMERA") {
                     SecondaryCameraLiveView(
                         recorder: captureEngine.secondaryCamera,
-                        previewHeight: Self.captureBoardCameraHeight
+                        // Reserve its spacing and two-line status inside this tile.
+                        previewHeight: max(0, cameraHeight - 36)
                     )
                     .frame(width: Self.captureBoardSecondaryCameraWidth,
-                           height: Self.captureBoardCameraHeight,
+                           height: cameraHeight,
                            alignment: .top)
                     .background(Color.black)
                 }
                 .frame(width: Self.captureBoardSecondaryCameraWidth)
+                }
             }
 
             captureBoardTile("LIVE NOTATION") {
-                liveNotationContent
+                liveNotationContent(chartHeight: notationHeight)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 4)
     }
 
-    private var verticalSamplePositionContent: some View {
+    @ViewBuilder
+    private func verticalSamplePositionContent(cameraHeight: CGFloat, showsSetupControls: Bool) -> some View {
+        if selectedCapturePath == .dvsThroughDJMS9 {
+            if showsSetupControls {
+                phaseAudioOwnerContent
+            } else {
+                Text("Serato scratch audio\nProgramme input\nUSB 5/6")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(height: cameraHeight, alignment: .center)
+            }
+        } else {
         VStack(alignment: .center, spacing: 8) {
-            MacSamplePositionWaveformView(
-                waveform: captureEngine.playbackWaveformSnapshot,
-                position: captureEngine.playbackPositionSnapshot,
-                positionLabel: "PLAYHEAD",
-                usesRenderedPlayhead: true
-            )
-            .frame(width: Self.captureBoardCameraHeight, height: 104)
+            ReferenceCaptureWaveform(engine: captureEngine)
+            .frame(width: cameraHeight, height: 104)
             .rotationEffect(.degrees(-90))
-            .frame(width: 104, height: Self.captureBoardCameraHeight)
+            .frame(width: 104, height: cameraHeight)
 
-            if captureEngine.playbackWaveformSnapshot == nil {
+            if showsSetupControls && captureEngine.playbackWaveformSnapshot == nil {
                 Button("Load AHHH") { captureEngine.loadPlatterTestSample() }
                     .disabled(viewModel.isWorking || captureEngine.isAudioInputSelectionLocked)
                     .controlSize(.small)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: Self.captureBoardCameraHeight, alignment: .top)
+        .frame(maxWidth: .infinity, minHeight: cameraHeight, alignment: .top)
         .background(Color.black.opacity(0.28), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
     }
 
     private func captureBoardTile<Content: View>(
@@ -949,21 +1035,19 @@ struct ReferenceAuthoringView: View {
     }
 
     @ViewBuilder
-    private var liveNotationContent: some View {
+    private func liveNotationContent(chartHeight: CGFloat) -> some View {
         if let liveNotationTracker {
             ReferenceLiveMotionContent(tracker: liveNotationTracker) { liveNotationTracker in
                 canonicalTearChart(
                     title: viewModel.selectedTechnique.map {
                         "YOUR MOTION — LIVE (\($0.displayName.uppercased()))"
                     } ?? "YOUR MOTION — LIVE",
-                    projection: ReferenceTearCanonicalProjectionBuilder.project(
-                        movementEvents: liveNotationTracker.continuousRenderedEvents,
-                        platterTrajectorySegments: liveNotationTracker.platterTrajectorySegments,
-                        platterEvidenceIntervals: liveNotationTracker.platterEvidenceIntervals,
-                        derivation: liveNotationTracker.faderDerivation,
-                        coordinates: liveNotationTracker.continuousPlatterCoordinates
-                    ).applyingMixerFaders(liveNotationTracker.mixerFaderEvidence),
-                    emptyMessage: "Waiting for movement…"
+                    projection: liveNotationTracker.canonicalProjection,
+                    emptyMessage: "Waiting for movement…",
+                    preparedReasons: liveNotationTracker.canonicalProjection.reasons,
+                    preparedChart: liveNotationTracker.presentation.canonicalChart,
+                    isLive: true,
+                    chartHeight: chartHeight
                 )
             }
             .frame(maxWidth: .infinity, minHeight: Self.captureBoardNotationHeight)
@@ -1248,25 +1332,9 @@ struct ReferenceAuthoringView: View {
         GroupBox("3. Live preflight") {
             VStack(alignment: .leading, spacing: 8) {
                 if let preflight = viewModel.session.latestPreflight {
-                    let satisfied = preflight.checks.filter { $0.status == .satisfied }
-                    let blocking = preflight.checks.filter { $0.status == .blocking }
-                    let advisory = preflight.checks.filter { $0.status == .advisory }
-                    if !satisfied.isEmpty {
-                        ViewThatFits(in: .horizontal) {
-                            preflightGrid(satisfied, columnCount: 2)
-                                .frame(minWidth: 560)
-                            preflightGrid(satisfied, columnCount: 1)
-                        }
-                    }
-                    if !satisfied.isEmpty && (!blocking.isEmpty || !advisory.isEmpty) {
-                        Divider()
-                    }
-                    ForEach(blocking) { check in
-                        preflightRow(check)
-                    }
-                    ForEach(advisory) { check in
-                        preflightRow(check)
-                    }
+                    // Status changes update the same cell. Moving live checks
+                    // between grids and full-width rows made the page jump.
+                    preflightGrid(preflight.checks)
                 } else {
                     Text("Apply the setup to begin live checks.")
                         .foregroundStyle(.secondary)
@@ -1279,14 +1347,20 @@ struct ReferenceAuthoringView: View {
         }
     }
 
-    private func preflightGrid(_ checks: [ReferencePreflightCheck], columnCount: Int) -> some View {
-        LazyVGrid(
-            columns: Array(repeating: GridItem(.flexible(), alignment: .topLeading), count: columnCount),
-            alignment: .leading,
-            spacing: 8
-        ) {
-            ForEach(checks) { check in
-                preflightRow(check)
+    private func preflightGrid(_ checks: [ReferencePreflightCheck]) -> some View {
+        // This is a small, bounded checklist in a longer scroll document.
+        // Measure every row now: lazy offscreen height estimates can move the
+        // current scroll offset when a live status changes below the viewport.
+        Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 8) {
+            ForEach(Array(stride(from: 0, to: checks.count, by: 2)), id: \.self) { index in
+                GridRow(alignment: .top) {
+                    preflightRow(checks[index])
+                    if index + 1 < checks.count {
+                        preflightRow(checks[index + 1])
+                    } else {
+                        Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                    }
+                }
             }
         }
     }
@@ -1299,11 +1373,11 @@ struct ReferenceAuthoringView: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(check.title).font(.callout.weight(.semibold))
-                Text(check.detail).font(.caption).foregroundStyle(.secondary)
+                Text(check.detail).font(.caption).monospacedDigit().foregroundStyle(.secondary)
             }
             .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(preflightStatusLabel(check.status)): \(check.title). \(check.detail)")
     }
@@ -1362,6 +1436,59 @@ struct ReferenceAuthoringView: View {
         }
     }
 
+    private func startFocusedRecording() {
+        guard canRecord else { return }
+        isCaptureFocused = true
+        viewModel.startRecording()
+    }
+
+    private var canLeaveCaptureView: Bool {
+        !viewModel.isWorking && !viewModel.isPreparingRecordedTake
+            && !captureEngine.isRoutineRecording && !captureEngine.isRoutineFinalizationPending
+    }
+
+    /// Replaces the form in the same window. The lifecycle modifiers remain
+    /// outside this branch, so entering focus cannot create another session,
+    /// re-arm the take's MIDI window, or cancel the in-flight finalization.
+    private var focusedCaptureContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("CAPTURE").font(.headline)
+                    Text(viewModel.workflowStatusText)
+                        .font(.caption.monospacedDigit()).lineLimit(1)
+                }
+                Spacer()
+                Button("Record") { startFocusedRecording() }
+                    .disabled(!canRecord)
+                Button("Stop and Finalize") { viewModel.stopRecording() }
+                    .disabled(!viewModel.canStopRecording)
+                Button("Back to setup") { isCaptureFocused = false }
+                    .disabled(!canLeaveCaptureView)
+            }
+            .frame(height: 48)
+            .accessibilityIdentifier("cxl.capture.focusControls")
+
+            GeometryReader { geometry in
+                let layout = ReferenceCaptureFocusLayout(availableHeight: geometry.size.height)
+                captureBoard(cameraHeight: layout.cameraHeight,
+                             notationHeight: layout.notationHeight,
+                             showsSetupControls: false)
+            }
+
+            // Messages retain their full text without changing board height.
+            ScrollView {
+                Text(viewModel.visibleMessage ?? "Wait for Recording started before performing.")
+                    .font(.caption).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(height: 44)
+        }
+        .padding(16)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .accessibilityIdentifier("cxl.capture.focusedWorkspace")
+    }
+
     private var recordingSection: some View {
         GroupBox("4. Record") {
             VStack(alignment: .leading, spacing: 10) {
@@ -1379,9 +1506,11 @@ struct ReferenceAuthoringView: View {
                 }
                 HStack {
                     Button(viewModel.session.selectedCapturePurpose == .movementCheck ? "Record movement check" : "Record Draft") {
-                        viewModel.startRecording()
+                        startFocusedRecording()
                     }
                     .disabled(!canRecord)
+                    Button("Open Capture View") { isCaptureFocused = true }
+                        .disabled(viewModel.isWorking)
                     Button("Stop and Finalize") {
                         viewModel.stopRecording()
                     }
@@ -1714,14 +1843,19 @@ struct ReferenceAuthoringView: View {
         emptyMessage: String,
         wrapPeriod: Double? = nil,
         recordedBPM: Int? = nil,
-        reviewTake: ReferenceAuthoringTake? = nil
+        reviewTake: ReferenceAuthoringTake? = nil,
+        preparedReasons: [ReferenceTearProjectionReason]? = nil,
+        preparedChart: ScratchStrokeGeometry.PreparedCanonicalChart? = nil,
+        isLive: Bool = false,
+        chartHeight: CGFloat? = nil
     ) -> some View {
+        let minimumChartHeight = chartHeight ?? Self.canonicalTearChartMinimumHeight
         let chartBPM = Double(recordedBPM ?? viewModel.bpm)
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color(white: 0.55))
-            if let fullFrame = ReferenceAuthoringViewModel.canonicalFrame(
+            if let fullFrame = preparedChart?.frame ?? ReferenceAuthoringViewModel.canonicalFrame(
                 for: projection,
                 bpm: chartBPM
             ), !projection.isEmpty {
@@ -1809,7 +1943,8 @@ struct ReferenceAuthoringView: View {
                     }
                 }
                 ScratchPhraseChartView(
-                    source: .canonical(projection.records, layer: .performance, frame: frame),
+                    source: preparedChart.map { .preparedCanonical($0) }
+                        ?? .canonical(projection.records, layer: .performance, frame: frame),
                     bpm: chartBPM,
                     showBeatGrid: reviewTake?.evidence.metadata.captureIntent?.isMovementCheck != true,
                     wrapPeriod: wrapPeriod,
@@ -1821,7 +1956,7 @@ struct ReferenceAuthoringView: View {
                 // inside an unbounded `ScrollView`, where `.infinity` resolves
                 // to the IDEAL height and collapses the lane — the same trap
                 // documented on `liveNotationMinimumHeight`.
-                .frame(maxWidth: .infinity, minHeight: Self.canonicalTearChartMinimumHeight)
+                .frame(maxWidth: .infinity, minHeight: minimumChartHeight)
                 .clipped()
                 .overlay {
                     if let selectedRange, !zoomed {
@@ -1835,12 +1970,26 @@ struct ReferenceAuthoringView: View {
                     bpm: chartBPM,
                     backgroundColor: .clear
                 )
-                .frame(maxWidth: .infinity, minHeight: Self.canonicalTearChartMinimumHeight)
+                .frame(maxWidth: .infinity, minHeight: minimumChartHeight)
             }
-            ForEach(projection.presentationReasons, id: \.rawValue) { reason in
-                Text(reason.detail)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            if isLive {
+                // Keep changing evidence messages from moving the surrounding
+                // controls. Every reason remains readable in this scroll area.
+                ScrollView {
+                    projectionReasons(preparedReasons ?? projection.reasons)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(height: 64)
+            } else {
+                projectionReasons(preparedReasons ?? projection.presentationReasons)
+            }
+        }
+    }
+
+    private func projectionReasons(_ reasons: [ReferenceTearProjectionReason]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(reasons, id: \.rawValue) { reason in
+                Text(reason.detail).font(.caption2).foregroundStyle(.secondary)
             }
         }
     }
@@ -2732,6 +2881,34 @@ private struct ReferenceLiveMotionContent<Content: View>: View {
     var body: some View { content(tracker) }
 }
 
+/// One bounded form refresh stream, independent of the raw capture streams.
+/// Delivery is asynchronous because ObservableObject publishes before its
+/// values change. A trailing update preserves the last change in a burst.
+final class ReferenceCaptureRefresh: ObservableObject {
+    let objectWillChange = ObservableObjectPublisher()
+    private var subscription: AnyCancellable?
+
+    init(changes: AnyPublisher<Void, Never>,
+         interval: DispatchQueue.SchedulerTimeType.Stride = .milliseconds(200)) {
+        subscription = changes
+            .throttle(for: interval, scheduler: DispatchQueue.main, latest: true)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.objectWillChange.send() }
+    }
+}
+
+/// The moving cursor retains the engine's display cadence without refreshing
+/// every hardware selector, calibration row and preflight control above it.
+private struct ReferenceCaptureWaveform: View {
+    @ObservedObject var engine: MacCaptureEngine
+
+    var body: some View {
+        MacSamplePositionWaveformView(waveform: engine.playbackWaveformSnapshot,
+            position: engine.playbackPositionSnapshot,
+            positionLabel: "PLAYHEAD", usesRenderedPlayhead: true)
+    }
+}
+
 #if DEBUG
 /// Compact, bounded, read-only counters for the live notation path.
 ///
@@ -2992,5 +3169,18 @@ enum CXLScratchOutputMeter {
         if db == -.infinity { return "Silent" }
         if db < -60 { return "Below −60 dBFS" }
         return String(format: "%.1f dBFS", db)
+    }
+}
+
+/// The board receives a finite camera and notation budget even on a 13-inch
+/// display. Status text and changing evidence cannot resize these regions.
+struct ReferenceCaptureFocusLayout: Equatable {
+    let cameraHeight: CGFloat
+    let notationHeight: CGFloat
+
+    init(availableHeight: CGFloat) {
+        let height = availableHeight.isFinite ? max(420, availableHeight) : 548
+        cameraHeight = max(140, min(380, (height - 170) * 0.52))
+        notationHeight = max(100, height - cameraHeight - 170)
     }
 }

@@ -187,6 +187,7 @@ final class ReferenceDraftStore {
         let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
         let sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: sidecarData)
         if let url = try sidecar.secondaryCamera?.verifiedURL(beside: primary) { urls.append(url) }
+        if let phase = sidecar.phaseDVSEvidence { urls.append(try phase.verifiedControlURL(beside: primary)) }
         return urls
     }
 

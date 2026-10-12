@@ -16,6 +16,8 @@
 //     index).
 
 import Combine
+import AppKit
+import SwiftUI
 import CoreMIDI
 import QuartzCore
 import XCTest
@@ -2279,7 +2281,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
 
         // Positive: the shared chart, fed canonical gesture records.
         XCTAssertTrue(
-            source.contains("movementEvents: liveNotationTracker.continuousRenderedEvents"),
+            source.contains("projection: liveNotationTracker.canonicalProjection"),
             "every authoring technique must retain the measured continuous track"
         )
         XCTAssertTrue(
@@ -2287,7 +2289,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             "the canonical tear chart must render through the shared phrase chart"
         )
         XCTAssertTrue(
-            source.contains("source: .canonical(projection.records, layer: .performance, frame: frame)"),
+            source.contains("?? .canonical(projection.records, layer: .performance, frame: frame)"),
             "tear notation must be projected canonical gesture records, not a bespoke drawing"
         )
 
@@ -2313,10 +2315,10 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         XCTAssertTrue(preview.contains("ReferenceLiveMotionContent(tracker: liveNotationTracker)"),
                       "the CXL chart must observe live tracker updates directly")
         XCTAssertTrue(source.contains("@ObservedObject var tracker: LivePerformedNotationTracker"))
-        XCTAssertTrue(preview.contains("movementEvents: liveNotationTracker.continuousRenderedEvents"))
-        XCTAssertTrue(preview.contains("platterEvidenceIntervals: liveNotationTracker.platterEvidenceIntervals"))
-        XCTAssertTrue(preview.contains("derivation: liveNotationTracker.faderDerivation"))
-        XCTAssertTrue(preview.contains("coordinates: liveNotationTracker.continuousPlatterCoordinates"))
+        XCTAssertTrue(preview.contains("projection: liveNotationTracker.canonicalProjection"))
+        XCTAssertFalse(preview.contains("ReferenceTearCanonicalProjectionBuilder.project("),
+                       "projection must be prepared on the poll queue, never in SwiftUI body")
+        XCTAssertTrue(source.contains("preparesCanonicalProjection: true"))
         XCTAssertTrue(preview.contains("$0.displayName.uppercased()"),
                       "Chirp and other techniques must not be called Tear in the preview")
         XCTAssertFalse(preview.contains("TEAR STRUCTURE"))
@@ -2346,19 +2348,15 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
     func testAuthoringLiveAndReviewShareOneTearProjection() throws {
         let source = try authoringViewSource()
         XCTAssertTrue(
-            source.contains("ReferenceTearCanonicalProjectionBuilder.project(\n                            movementEvents: liveNotationTracker.continuousRenderedEvents\n                        )")
-                || source.contains("movementEvents: liveNotationTracker.continuousRenderedEvents"),
-            "the live preview must project through ReferenceTearCanonicalProjectionBuilder"
+            source.contains("projection: liveNotationTracker.canonicalProjection"),
+            "the live preview must consume the shared canonical projection prepared off the UI thread"
         )
         try assertFinalizedTearProjectionContract(in: source)
-        // The live boundary must also DECLARE which coordinate its positions
-        // are in. Without this the projection falls back to the non-claiming
-        // take-local basis and the live chart silently stops saying
-        // "revolutions" even though the decoder really did divide by
-        // steps-per-revolution.
+        // The preparer preserves explicit take-local, calibrated-loop and
+        // Phase bases; the behavioral projection tests cover all three.
         XCTAssertTrue(
-            source.contains("coordinates: liveNotationTracker.continuousPlatterCoordinates"),
-            "the live preview must state its platter coordinate basis"
+            source.contains("preparesCanonicalProjection: true"),
+            "the live preview must opt into coordinate-aware projection preparation"
         )
     }
 
@@ -3383,12 +3381,12 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         )
         if view.contains(".onChange(of: captureEngine.") {
             XCTAssertTrue(
-                view.contains("@ObservedObject private var captureEngine: MacCaptureEngine"),
-                "engine property changes require an observed engine reference"
+                view.contains("@StateObject private var captureRefresh: ReferenceCaptureRefresh"),
+                "engine property changes require the bounded form observer"
             )
             XCTAssertTrue(
-                view.contains("_captureEngine = ObservedObject(wrappedValue: engine)"),
-                "the route must initialize observation of the injected engine"
+                view.contains("changes: engine.objectWillChange.eraseToAnyPublisher()"),
+                "the route must initialize bounded observation of the injected engine"
             )
         }
         XCTAssertFalse(
@@ -4210,7 +4208,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         )
 
         let liveTitle = try XCTUnwrap(
-            source.range(of: "projection: ReferenceTearCanonicalProjectionBuilder.project(")
+            source.range(of: "projection: liveNotationTracker.canonicalProjection")
         )
         let liveCall = String(source[liveTitle.lowerBound...].prefix(900))
         XCTAssertFalse(
@@ -4236,11 +4234,11 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let source = try authoringViewSource()
         try assertFinalizedTearProjectionContract(in: source)
         XCTAssertTrue(
-            source.contains("movementEvents: liveNotationTracker.continuousRenderedEvents"),
+            source.contains("projection: liveNotationTracker.canonicalProjection"),
             "and the live lane through the same one"
         )
         XCTAssertTrue(
-            source.contains("coordinates: liveNotationTracker.continuousPlatterCoordinates"),
+            source.contains("preparesCanonicalProjection: true"),
             "the live boundary must still declare its coordinate basis"
         )
         // No second engine, decoder, model or renderer was introduced.
@@ -4374,5 +4372,446 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             calibratedPosition: nil,
             calibrationID: nil
         )
+    }
+}
+
+
+extension LivePerformedNotationTrackerTests {
+    func testPreparedLiveProjectionMatchesCanonicalBuilderForMeasuredMotionAndGaps() throws {
+        var packets = platterEvents(signedRunSteps: [30, -25, 20, -30])
+        packets += platterEvents(signedRunSteps: [25, -30]).map { packet in
+            midiEvent(value: packet.value, takeRelativeTime: packet.takeRelativeTime + 4,
+                      timestamp: packet.timestamp + 4)
+        }
+        let dataSource = LivePerformedNotationDataSource(selectedMIDISourceName: { "Test Device" },
+            capturedMidiCCEventsSnapshot: { packets }, cameraMovementEventsSnapshot: { _ in nil })
+        let state = LivePerformedNotationTracker.computeState(dataSource: dataSource, baselineTimestamp: -1)
+        guard case .tracking(_, _, _, _, let segments, let intervals, let fader, _) = state else {
+            return XCTFail("Expected measured motion")
+        }
+        let expected = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: LivePerformedNotationTracker.continuousRenderedEvents(for: state),
+            platterTrajectorySegments: segments, platterEvidenceIntervals: intervals,
+            derivation: fader, coordinates: .normalizedTakeLocal(
+                reference: "continuous window-normalised platter telemetry for the canonical Tear projection"))
+        XCTAssertFalse(expected.isEmpty)
+        XCTAssertEqual(LivePerformedNotationTracker.canonicalProjection(for: state, mixerFaders: nil), expected)
+        XCTAssertTrue(intervals.contains { $0.kind == .packetGap })
+        XCTAssertTrue(LivePerformedNotationTracker.canonicalProjection(for: .waiting, mixerFaders: nil).isEmpty)
+        XCTAssertTrue(LivePerformedNotationTracker.canonicalProjection(for: .unavailable, mixerFaders: nil).isEmpty)
+    }
+
+    func testPreparedProjectionRetainsCalibratedLoopAndPhaseCoordinateContracts() throws {
+        let packets = platterEvents(signedRunSteps: [30, -25, 20])
+        let source = LivePerformedNotationDataSource(selectedMIDISourceName: { "Test Device" },
+            capturedMidiCCEventsSnapshot: { packets }, cameraMovementEventsSnapshot: { _ in nil })
+        let state = LivePerformedNotationTracker.computeState(dataSource: source, baselineTimestamp: -1)
+        guard case .tracking(let committed, let provisional, let continuous, let continuousProvisional,
+                             let segments, let intervals, let fader, _) = state else {
+            return XCTFail("Expected measured fixture motion")
+        }
+        for isPhase in [false, true] {
+            let events = isPhase ? continuous.map { event in
+                CaptureCore.DetectedNotationRecordMovementEvent(startTime: event.startTime,
+                    endTime: event.endTime, startPosition: event.startPosition, endPosition: event.endPosition,
+                    direction: event.direction, movementKind: event.movementKind, speed: event.speed,
+                    confidence: event.confidence, source: PhaseDVSRecordingEvidence.source)
+            } : continuous
+            let input = LiveNotationTrackingState.tracking(committed: committed, provisional: provisional,
+                continuousCommitted: events, continuousProvisional: continuousProvisional,
+                trajectorySegments: segments, platterEvidenceIntervals: intervals,
+                faderDerivation: fader, wrapPeriod: 1)
+            let coordinates: CaptureCore.PlatterNotationCoordinates = isPhase
+                ? .normalizedTakeLocal(reference: PhaseDVSRecordingEvidence.coordinateReference)
+                : .raneOneMKIIDirectMIDI()
+            let expected = ReferenceTearCanonicalProjectionBuilder.project(
+                movementEvents: isPhase ? events : LivePerformedNotationTracker.continuousRenderedEvents(for: input),
+                platterTrajectorySegments: segments, platterEvidenceIntervals: intervals,
+                derivation: fader, coordinates: coordinates)
+            let prepared = LivePerformedNotationTracker.canonicalProjection(for: input, mixerFaders: nil)
+            XCTAssertFalse(prepared.isEmpty)
+            XCTAssertEqual(prepared, expected)
+            XCTAssertEqual(prepared.coordinateSpace, coordinates.coordinateSpace)
+        }
+    }
+
+    func testCanonicalPresentationPublishesMatchingMotionAndProjectionOnMainThread() throws {
+        let packets = platterEvents(signedRunSteps: [30, -25, 20])
+        let dataSource = LivePerformedNotationDataSource(selectedMIDISourceName: { "Test Device" },
+            capturedMidiCCEventsSnapshot: {
+                XCTAssertFalse(Thread.isMainThread, "evidence processing must stay off the UI thread")
+                return packets
+            }, cameraMovementEventsSnapshot: { _ in nil })
+        let tracker = LivePerformedNotationTracker(dataSource: dataSource, now: -1,
+            pollInterval: 60, preparesCanonicalProjection: true)
+        defer { tracker.freeze() }
+        let published = expectation(description: "one complete presentation")
+        let subscription = tracker.$presentation.dropFirst().prefix(1).sink { frame in
+            XCTAssertTrue(Thread.isMainThread)
+            XCTAssertEqual(frame.canonicalProjection,
+                LivePerformedNotationTracker.canonicalProjection(for: frame.state, mixerFaders: frame.mixerFaders))
+            XCTAssertFalse(frame.canonicalProjection?.isEmpty ?? true)
+            if let projection = frame.canonicalProjection, let chart = frame.canonicalChart {
+                XCTAssertEqual(chart.frame.timeRange, projection.timeRange)
+                XCTAssertEqual(chart.geometry, ScratchStrokeGeometry.canonicalGeometry(
+                    records: projection.records, layer: .performance, frame: chart.frame))
+            } else {
+                XCTFail("Projection and drawing geometry must cross to the UI together")
+            }
+            published.fulfill()
+        }
+        wait(for: [published], timeout: 5)
+        withExtendedLifetime(subscription) {}
+    }
+
+
+    func testFormRefreshCoalescesBurstAndDeliversLatestValueOnMain() {
+        let changes = PassthroughSubject<Void, Never>()
+        let refresh = ReferenceCaptureRefresh(changes: changes.eraseToAnyPublisher(), interval: .milliseconds(30))
+        var currentValue = 0
+        var observed: [Int] = []
+        let subscription = refresh.objectWillChange.sink {
+            XCTAssertTrue(Thread.isMainThread)
+            observed.append(currentValue)
+        }
+        for value in 1...1_000 {
+            changes.send() // Match @Published's will-change ordering.
+            currentValue = value
+        }
+        XCTAssertTrue(observed.isEmpty, "Never refresh before the model mutation completes")
+        let drained = expectation(description: "trailing form update")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { drained.fulfill() }
+        wait(for: [drained], timeout: 2)
+        XCTAssertEqual(observed.last, 1_000)
+        XCTAssertLessThanOrEqual(observed.count, 2, "A packet burst must not trigger a thousand form layouts")
+        withExtendedLifetime((refresh, subscription)) {}
+    }
+
+    /// Exercise SwiftUI's actual dependency graph using the production service
+    /// owner. The direct engine observer is a positive control for the old root.
+    @MainActor
+    func testLiveEngineUpdatesReachLeafWithoutRebuildingServiceOwnerRoot() async throws {
+        let services = ScratchLabDesktopServices(isRunningTests: true, activateAuxiliaryServices: false)
+        let isolated = UIRefreshProbe()
+        let direct = UIRefreshProbe()
+        let host = NSHostingView(rootView: ServiceOwnerProbe(services: services, probe: isolated))
+        let control = NSHostingView(rootView: DirectEngineProbe(engine: services.captureEngine, probe: direct))
+        host.frame = NSRect(x: 0, y: 0, width: 400, height: 150)
+        control.frame = host.frame
+        host.layoutSubtreeIfNeeded()
+        control.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        host.layoutSubtreeIfNeeded()
+        control.layoutSubtreeIfNeeded()
+        let initialRoot = isolated.rootEvaluations
+        let initialDirect = direct.rootEvaluations
+        let initialLeaf = isolated.leafEvaluations
+        XCTAssertGreaterThan(initialRoot, 0)
+        for index in 1...30 {
+            services.captureEngine.handPosition = CGPoint(x: CGFloat(index), y: 0)
+            services.captureEngine.audioLevel = Float(index) / 30
+            try await Task.sleep(for: .milliseconds(20))
+            host.layoutSubtreeIfNeeded()
+            control.layoutSubtreeIfNeeded()
+        }
+        XCTAssertEqual(isolated.rootEvaluations, initialRoot,
+                       "Camera/meter publications must not invalidate the window's service owner")
+        XCTAssertGreaterThan(isolated.leafEvaluations, initialLeaf,
+                             "A visible leaf must still receive live engine updates")
+        XCTAssertEqual(isolated.latestPosition, CGPoint(x: 30, y: 0))
+        XCTAssertGreaterThan(direct.rootEvaluations, initialDirect,
+                             "The old direct observation must reproduce parent invalidation in this harness")
+        print("UI_OWNER_REGRESSION directRoot=\(direct.rootEvaluations - initialDirect) isolatedRoot=\(isolated.rootEvaluations - initialRoot) liveLeaf=\(isolated.leafEvaluations - initialLeaf)")
+    }
+
+    /// Render the real form, including its nested live views and lifecycle,
+    /// without opening devices. Publications emulate live presentation traffic;
+    /// this does not emulate camera inference cost or establish Intel latency.
+    @MainActor
+    func testAuthoringFormRetainsScrollPositionDuringLivePresentationUpdates() async throws {
+        let services = ScratchLabDesktopServices(isRunningTests: true, activateAuxiliaryServices: false)
+        let host = NSHostingView(rootView: ReferenceAuthoringView(
+            engine: services.captureEngine, companionReceiver: nil, operatorName: "UI regression"))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .seconds(1))
+        host.layoutSubtreeIfNeeded()
+        func scrollViews(in view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
+        }
+        let scroll = try XCTUnwrap(scrollViews(in: host).max { $0.bounds.height < $1.bounds.height })
+        let document = try XCTUnwrap(scroll.documentView)
+        XCTAssertGreaterThan(document.bounds.height, scroll.contentView.bounds.height + 500,
+                             "The actual long authoring form must be laid out")
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: 350))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        host.layoutSubtreeIfNeeded()
+        let initial = scroll.contentView.bounds.origin
+        XCTAssertGreaterThan(initial.y, 100, "The test must really scroll away from the top")
+        var maximumDrift: CGFloat = 0
+        for index in 1...60 {
+            services.captureEngine.handPosition = CGPoint(x: Double(index % 10) / 10, y: 0.5)
+            services.captureEngine.handDetected = index % 2 == 0
+            services.captureEngine.audioLevel = Float(index % 10) / 10
+            try await Task.sleep(for: .milliseconds(20))
+            host.layoutSubtreeIfNeeded()
+            maximumDrift = max(maximumDrift, abs(scroll.contentView.bounds.origin.y - initial.y))
+        }
+        XCTAssertLessThanOrEqual(maximumDrift, 1,
+                                 "Live updates must not move the setup page while the operator is idle")
+        XCTAssertEqual(services.captureEngine.handPosition, CGPoint(x: 0, y: 0.5))
+        print("UI_FORM_SCROLL_REGRESSION updates=60 maximumDrift=\(maximumDrift) documentHeight=\(document.bounds.height)")
+    }
+
+    @MainActor
+    func testAudioWarningTransitionsKeepSetupAndBottomOfFormStationary() async throws {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.liveInputStartupOverride = {}
+        engine.captureInputReconfigurationOverride = { _, _ in }
+        engine.start()
+        defer { engine.stop() }
+        XCTAssertNotEqual(engine.phaseCapturePath, .dvsThroughDJMS9)
+        let host = NSHostingView(rootView: ReferenceAuthoringView(
+            engine: engine, companionReceiver: nil, operatorName: "Warning layout regression"))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        try await Task.sleep(for: .seconds(1))
+        host.layoutSubtreeIfNeeded()
+        func scrollViews(in view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
+        }
+        let scroll = try XCTUnwrap(scrollViews(in: host).max { $0.bounds.height < $1.bounds.height })
+        let document = try XCTUnwrap(scroll.documentView)
+        // Exercise both meter instances: one in hardware Setup and one above
+        // Review. A fixed scroll origin alone misses content moving underneath it.
+        for position in ["setup", "bottom"] {
+            let originalHeight = document.bounds.height
+            let y = position == "setup" ? 350 : originalHeight - scroll.contentView.bounds.height
+            scroll.contentView.scroll(to: CGPoint(x: 0, y: y))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            let originalOffset = scroll.contentView.bounds.origin.y
+            var heightDrift: CGFloat = 0
+            var offsetDrift: CGFloat = 0
+            for index in 0..<10 {
+                let unavailable = index.isMultiple(of: 2)
+                let now = CACurrentMediaTime()
+                engine.publishScratchOutputMeterSnapshot(.init(sampleID: "dvs_ahhh", generation: 1,
+                    peak: 0.2, receivedAt: unavailable ? now - 1 : now, sampledAt: now))
+                try await Task.sleep(for: .milliseconds(120))
+                host.layoutSubtreeIfNeeded()
+                XCTAssertEqual(engine.activeScratchOutputSignalLevel == nil, unavailable,
+                               "The real meter must alternate between fresh and stale evidence")
+                heightDrift = max(heightDrift, abs(document.bounds.height - originalHeight))
+                offsetDrift = max(offsetDrift, abs(scroll.contentView.bounds.origin.y - originalOffset))
+            }
+            print("UI_WARNING_LAYOUT position=\(position) heightDrift=\(heightDrift) offsetDrift=\(offsetDrift)")
+            XCTAssertLessThanOrEqual(heightDrift, 1, "Warnings must not insert or remove space in the actual form")
+            XCTAssertLessThanOrEqual(offsetDrift, 1, "Warnings must not move the operator's scroll position")
+        }
+        XCTAssertFalse(engine.isCameraActive)
+        XCTAssertFalse(engine.isRoutineRecording)
+    }
+
+    func testCaptureFocusLayoutKeepsCameraAndNotationInsideSmallWindowBudget() {
+        for height in stride(from: 420.0, through: 1400.0, by: 10) {
+            let layout = ReferenceCaptureFocusLayout(availableHeight: height)
+            XCTAssertGreaterThanOrEqual(layout.cameraHeight, 140)
+            XCTAssertLessThanOrEqual(layout.cameraHeight, 380)
+            XCTAssertGreaterThanOrEqual(layout.notationHeight, 100)
+            XCTAssertLessThanOrEqual(layout.cameraHeight + layout.notationHeight + 170, height + 0.001)
+        }
+        XCTAssertTrue(ReferenceCaptureFocusLayout(availableHeight: .nan).cameraHeight.isFinite)
+    }
+
+    func testCaptureFocusKeepsOneStartPathAndRouteOwnedLifecycle() throws {
+        let source = try authoringViewSource()
+        XCTAssertEqual(source.components(separatedBy: "viewModel.startRecording()").count - 1, 1)
+        XCTAssertTrue(source.contains("guard canRecord else { return }\n        isCaptureFocused = true\n        viewModel.startRecording()"))
+        XCTAssertTrue(source.contains("if !isRecording, case .reviewing = viewModel.session.phase"))
+        XCTAssertTrue(source.contains("!captureEngine.isRoutineRecording && !captureEngine.isRoutineFinalizationPending"))
+        let focusStart = try XCTUnwrap(source.range(of: "private var focusedCaptureContent: some View"))
+        let focusEnd = try XCTUnwrap(source.range(of: "private var recordingSection: some View"))
+        let focus = String(source[focusStart.lowerBound..<focusEnd.lowerBound])
+        XCTAssertTrue(focus.contains("captureBoard(cameraHeight: layout.cameraHeight"))
+        XCTAssertTrue(focus.contains("showsSetupControls: false"))
+        for forbidden in ["hardwareSetupSection", "preflightSection", "setupSection", "LivePerformedNotationTracker(", ".task", ".onDisappear"] {
+            XCTAssertFalse(focus.contains(forbidden), "Focus must reuse the route and contain only the capture surface")
+        }
+        XCTAssertTrue(source.contains("keepsCameraGuideOnDisappear: true"))
+        XCTAssertTrue(source.contains("captureEngine.disableCXLCameraGuide()"))
+    }
+
+    @MainActor
+    func testFocusedCaptureRendersBoundedRegionsWithoutStartingDevices() async throws {
+        let services = ScratchLabDesktopServices(isRunningTests: true, activateAuxiliaryServices: false)
+        for size in [CGSize(width: 900, height: 700), CGSize(width: 1180, height: 820)] {
+            let host = NSHostingView(rootView: ReferenceAuthoringView(
+                engine: services.captureEngine, companionReceiver: nil,
+                operatorName: "UI regression", startsInCaptureView: true))
+            let window = NSWindow(contentRect: CGRect(origin: .zero, size: size),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = host
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(500))
+            host.layoutSubtreeIfNeeded()
+            func scrollViews(in view: NSView) -> [NSScrollView] {
+                (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
+            }
+            let scrolls = scrollViews(in: host)
+            XCTAssertFalse(scrolls.isEmpty, "The message region must actually render")
+            for scroll in scrolls {
+                XCTAssertLessThanOrEqual(scroll.bounds.height, 70,
+                                         "Focus must not retain the long setup form's scroll viewport")
+            }
+            for index in 1...30 {
+                services.captureEngine.handPosition = CGPoint(x: Double(index) / 30, y: 0.5)
+                services.captureEngine.audioLevel = Float(index) / 30
+                try await Task.sleep(for: .milliseconds(20))
+                host.layoutSubtreeIfNeeded()
+            }
+            XCTAssertFalse(services.captureEngine.isRoutineRecording)
+            XCTAssertFalse(services.captureEngine.isCameraActive)
+            XCTAssertEqual(host.bounds.size, size)
+            if let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+                attachment.name = "Capture focus \(Int(size.width))x\(Int(size.height))"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            } else {
+                XCTFail("The focused capture view must produce a reviewable image")
+            }
+            print("UI_FOCUS_REGRESSION viewport=\(size) scrollHeights=\(scrolls.map { $0.bounds.height }) recording=false camera=false")
+            window.contentView = nil
+        }
+    }
+
+    func testDesktopWindowOwnerDoesNotSubscribeToLiveServices() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("ScratchLabDesktop/ScratchLabDesktopApp.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("@StateObject private var services: ScratchLabDesktopServices"))
+        for name in ["captureEngine", "companionReceiver", "performerBroadcaster", "relayedWatchCaptureStore"] {
+            XCTAssertFalse(source.contains("@StateObject private var \(name):"))
+        }
+        XCTAssertTrue(source.contains(".environmentObject(captureEngine)"))
+        XCTAssertTrue(source.contains(".environmentObject(companionReceiver)"))
+    }
+
+    func testLiveFormKeepsStatusCellsAndDrawingPreparationStable() throws {
+        let source = try authoringViewSource()
+        let start = try XCTUnwrap(source.range(of: "private var preflightSection: some View"))
+        let end = try XCTUnwrap(source.range(of: "private func preflightGrid("))
+        let preflight = String(source[start.lowerBound..<end.lowerBound])
+        XCTAssertTrue(preflight.contains("preflightGrid(preflight.checks)"))
+        XCTAssertFalse(preflight.contains(".filter"), "A status flip must not move a cell into another layout")
+        XCTAssertFalse(preflight.contains("ViewThatFits"))
+        let gridEnd = try XCTUnwrap(source.range(of: "private func preflightRow("))
+        let grid = String(source[end.lowerBound..<gridEnd.lowerBound])
+        XCTAssertFalse(grid.contains("LazyVGrid"))
+        XCTAssertTrue(grid.contains("GridRow(alignment: .top)"))
+        XCTAssertTrue(source.contains("preparedChart: liveNotationTracker.presentation.canonicalChart"))
+        XCTAssertTrue(source.contains("source: preparedChart.map { .preparedCanonical($0) }"))
+        XCTAssertTrue(source.contains(".onReceive(captureEngine.$isRoutineRecording.removeDuplicates().dropFirst().receive(on: DispatchQueue.main))"),
+                      "Recording transitions must bypass the throttled form updates")
+    }
+
+    @MainActor
+    func testPreparedChartPreservesDenseMotionGapsWrapsAndSeparateMixerLanes() throws {
+        let raw = platterEvents(signedRunSteps: [30, -25, 20])
+        let state = LivePerformedNotationTracker.computeState(dataSource: LivePerformedNotationDataSource(
+            selectedMIDISourceName: { "Test Device" }, capturedMidiCCEventsSnapshot: { raw },
+            cameraMovementEventsSnapshot: { _ in nil }), baselineTimestamp: -1)
+        let projection = LivePerformedNotationTracker.canonicalProjection(for: state, mixerFaders: nil)
+        let frame = try XCTUnwrap(ReferenceAuthoringViewModel.canonicalFrame(for: projection, bpm: 95))
+        let binding = ScratchMixerFaderEvidence.Binding(sourceID: "prepared-chart", connectionGeneration: 1,
+            channel: 1, controller: 28, minimum: 0, maximum: 127, inverted: false,
+            response: .init(zeroAt: 0, oneAt: 1, shape: .linear))
+        var recorder = ScratchMixerFaderRecorder()
+        recorder.observe(control: .crossfader, binding: binding, rawValue: 127, at: 9, admitted: false)
+        recorder.begin(at: 10, sessionID: "synthetic", takeID: "synthetic")
+        recorder.observe(control: .crossfader, binding: binding, rawValue: 0, at: 10.2, admitted: true)
+        recorder.close(at: 11)
+        let mixer = try XCTUnwrap(recorder.snapshot(at: 11))
+        for period in [nil, 0.1, 1] as [Double?] {
+            for evidence in [nil, mixer] as [ScratchMixerFaderEvidence?] {
+                let input = evidence.map { projection.applyingMixerFaders($0) } ?? projection
+                let prepared = ScratchStrokeGeometry.PreparedCanonicalChart(records: input.records,
+                    layer: .performance, frame: frame, wrapPeriod: period, mixerFaders: evidence)
+                let direct = ScratchStrokeGeometry.canonicalGeometry(records: input.records,
+                    layer: .performance, frame: frame, wrapPeriod: period)
+                XCTAssertEqual(prepared.geometry, direct)
+                XCTAssertFalse(prepared.geometry.motion.isEmpty)
+                for control in ScratchMixerFaderEvidence.Control.allCases {
+                    XCTAssertEqual(prepared.mixerSpans?[control], evidence?.spans(for: control, in: frame.timeRange))
+                }
+                XCTAssertEqual(prepared.combinedMixerSpans, evidence?.combinedSpans(in: frame.timeRange))
+            }
+        }
+    }
+
+    func testCombinedReviewOnsetPreviewMatchesExistingOutputsAndReset() {
+        let accumulator = NotationCandidateAccumulator()
+        let samples: [Float] = (0..<96_000).map { index in
+            let active = index % 12_000 < 2_000
+            return active ? Float(sin(Double(index) * 0.11)) * 0.8 : 0
+        }
+        for rate in [48_000.0, 44_100.0] {
+            accumulator.pushSamples(samples, sampleRate: rate)
+            for cap in [1, 8, 80] {
+                let combined = accumulator.currentReviewPreview(maxCandidates: cap)
+                XCTAssertEqual(combined.summary, accumulator.currentReviewSummary(maxCandidates: cap))
+                XCTAssertEqual(combined.marks, accumulator.currentReviewMarks(maxCandidates: cap))
+            }
+        }
+        accumulator.reset()
+        let empty = accumulator.currentReviewPreview()
+        XCTAssertEqual(empty.summary, .empty)
+        XCTAssertTrue(empty.marks.isEmpty)
+    }
+}
+
+@MainActor
+private final class UIRefreshProbe {
+    var rootEvaluations = 0
+    var leafEvaluations = 0
+    var latestPosition: CGPoint?
+}
+
+@MainActor
+private struct ServiceOwnerProbe: View {
+    @ObservedObject var services: ScratchLabDesktopServices
+    let probe: UIRefreshProbe
+    var body: some View {
+        let _ = { probe.rootEvaluations += 1 }()
+        EngineLeafProbe(engine: services.captureEngine, probe: probe)
+    }
+}
+
+@MainActor
+private struct DirectEngineProbe: View {
+    @ObservedObject var engine: MacCaptureEngine
+    let probe: UIRefreshProbe
+    var body: some View {
+        let _ = { probe.rootEvaluations += 1 }()
+        EngineLeafProbe(engine: engine, probe: probe)
+    }
+}
+
+@MainActor
+private struct EngineLeafProbe: View {
+    @ObservedObject var engine: MacCaptureEngine
+    let probe: UIRefreshProbe
+    var body: some View {
+        let _ = {
+            probe.leafEvaluations += 1
+            probe.latestPosition = engine.handPosition
+        }()
+        Text(String(describing: engine.handPosition))
     }
 }

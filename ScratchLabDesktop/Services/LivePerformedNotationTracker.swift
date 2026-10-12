@@ -78,6 +78,7 @@ struct LivePerformedNotationDataSource {
     /// Transient presentation input; never supplied to physical decoding.
     let activePlaybackLoopContext: () -> PlaybackLoopContext?
     let mixerFaderEvidence: () -> ScratchMixerFaderEvidence?
+    let phaseMotion: () -> CaptureCore.PlatterMotionEvidence?
 
     init(
         selectedMIDISourceName: @escaping () -> String,
@@ -88,7 +89,8 @@ struct LivePerformedNotationDataSource {
         activeCrossfaderTakeStartState: @escaping () -> CaptureCore.CrossfaderTakeStartState? = { nil },
         activeCrossfaderState: (() -> LiveCrossfaderStateSnapshot?)? = nil,
         activePlaybackLoopContext: @escaping () -> PlaybackLoopContext? = { nil },
-        mixerFaderEvidence: @escaping () -> ScratchMixerFaderEvidence? = { nil }
+        mixerFaderEvidence: @escaping () -> ScratchMixerFaderEvidence? = { nil },
+        phaseMotion: @escaping () -> CaptureCore.PlatterMotionEvidence? = { nil }
     ) {
         self.selectedMIDISourceName = selectedMIDISourceName
         self.selectedMIDISourceIdentifier = selectedMIDISourceIdentifier
@@ -99,6 +101,7 @@ struct LivePerformedNotationDataSource {
         self.activeCrossfaderState = activeCrossfaderState
         self.activePlaybackLoopContext = activePlaybackLoopContext
         self.mixerFaderEvidence = mixerFaderEvidence
+        self.phaseMotion = phaseMotion
     }
 }
 
@@ -149,8 +152,21 @@ enum LiveNotationTrackingState: Equatable {
 /// Capture take. A fresh instance is still the reset at Restart/new take;
 /// `freeze()` stops polling while retaining the completed Practice trace.
 final class LivePerformedNotationTracker: ObservableObject {
-    @Published private(set) var state: LiveNotationTrackingState = .waiting
-    @Published private(set) var mixerFaderEvidence: ScratchMixerFaderEvidence?
+    struct Presentation: Equatable {
+        let state: LiveNotationTrackingState
+        let mixerFaders: ScratchMixerFaderEvidence?
+        let canonicalProjection: ReferenceTearCanonicalProjection?
+        var canonicalChart: ScratchStrokeGeometry.PreparedCanonicalChart? = nil
+    }
+
+    // Motion, mixer evidence and prepared geometry cross to the UI together.
+    @Published private(set) var presentation = Presentation(
+        state: .waiting, mixerFaders: nil, canonicalProjection: nil)
+    var state: LiveNotationTrackingState { presentation.state }
+    var mixerFaderEvidence: ScratchMixerFaderEvidence? { presentation.mixerFaders }
+    var canonicalProjection: ReferenceTearCanonicalProjection {
+        presentation.canonicalProjection ?? Self.canonicalProjection(for: .waiting, mixerFaders: nil)
+    }
     /// Latest poll's counters. DEBUG surfaces only; never read by rendering.
     @Published private(set) var diagnostics: LiveNotationDiagnostics?
     @Published private(set) var isFrozen = false
@@ -158,6 +174,10 @@ final class LivePerformedNotationTracker: ObservableObject {
 
     private let dataSource: LivePerformedNotationDataSource
     private let baselineTimestamp: Double
+    private let preparesCanonicalProjection: Bool
+    private let publicationLock = NSLock()
+    private var publicationPending = false
+    private var lastPreparedPresentation: Presentation?
     private var frozenTimestamp: Double?
     private var timer: DispatchSourceTimer?
     private let pollQueue = DispatchQueue(label: "com.scratchlab.livePerformedNotation.poll")
@@ -173,10 +193,12 @@ final class LivePerformedNotationTracker: ObservableObject {
     init(
         dataSource: LivePerformedNotationDataSource,
         now: Double = CACurrentMediaTime(),
-        pollInterval: TimeInterval = 0.04
+        pollInterval: TimeInterval = 0.04,
+        preparesCanonicalProjection: Bool = false
     ) {
         self.dataSource = dataSource
         self.baselineTimestamp = now
+        self.preparesCanonicalProjection = preparesCanonicalProjection
         startPolling(interval: pollInterval)
     }
 
@@ -343,13 +365,18 @@ final class LivePerformedNotationTracker: ObservableObject {
 
     /// Continuous presentation input for the canonical Tear projection.
     var continuousRenderedEvents: [CaptureCore.DetectedNotationRecordMovementEvent] {
-        Self.continuousRenderedEvents(for: state)
+        if case .tracking(_, _, let events, _, _, _, _, _) = state,
+           events.first?.source == PhaseDVSRecordingEvidence.source { return events }
+        return Self.continuousRenderedEvents(for: state)
     }
 
     /// The aligned path reconstructs raw steps and divides by the established
     /// direct-MIDI steps/revolution calibration. The fallback remains fitted.
     var continuousPlatterCoordinates: CaptureCore.PlatterNotationCoordinates {
-        continuousWrapPeriod == nil
+        if continuousRenderedEvents.first?.source == PhaseDVSRecordingEvidence.source {
+            return .normalizedTakeLocal(reference: PhaseDVSRecordingEvidence.coordinateReference)
+        }
+        return continuousWrapPeriod == nil
             ? .normalizedTakeLocal(reference: "continuous window-normalised platter telemetry for the canonical Tear projection")
             : .raneOneMKIIDirectMIDI()
     }
@@ -473,22 +500,80 @@ final class LivePerformedNotationTracker: ObservableObject {
     }
 
     private func tick() {
-        let dataSource = self.dataSource
-        let baseline = self.baselineTimestamp
-        guard let frame = Self.computeFrame(dataSource: dataSource, baselineTimestamp: baseline) else { return }
-        let newState = frame.state
-        let mixerFaders = frame.mixerFaders
-        let newDiagnostics = Self.diagnostics(
-            dataSource: dataSource,
-            baselineTimestamp: baseline,
-            state: newState
-        )
-        Task { @MainActor [weak self] in
-            guard let self, !self.isFrozen else { return }
-            self.state = newState
-            self.mixerFaderEvidence = mixerFaders
-            self.diagnostics = newDiagnostics
+        // A slow main thread must not accumulate obsolete frames or retain
+        // a fresh copy of the growing evidence history for each queued task.
+        publicationLock.lock()
+        guard !publicationPending else { publicationLock.unlock(); return }
+        publicationPending = true
+        publicationLock.unlock()
+        guard let frame = Self.computeFrame(dataSource: dataSource, baselineTimestamp: baselineTimestamp) else {
+            finishPublication()
+            return
         }
+        var prepared = Presentation(state: frame.state, mixerFaders: frame.mixerFaders,
+            canonicalProjection: preparesCanonicalProjection
+                ? Self.canonicalProjection(for: frame.state, mixerFaders: frame.mixerFaders) : nil)
+        if let projection = prepared.canonicalProjection,
+           let timeRange = projection.timeRange,
+           let chartFrame = ScratchStrokeGeometry.CanonicalFrame(
+                timeRange: timeRange, positionRange: projection.positionRange ?? -0.5...0.5,
+                coordinateSpace: projection.coordinateSpace, beatsPerMinute: 90),
+           !projection.isEmpty {
+            prepared.canonicalChart = .init(records: projection.records, layer: .performance,
+                frame: chartFrame, mixerFaders: projection.mixerFaders)
+        }
+        let changed = prepared != lastPreparedPresentation
+        lastPreparedPresentation = prepared
+        let preparedFrame = prepared
+        #if DEBUG
+        let newDiagnostics = Self.diagnostics(
+            dataSource: dataSource, baselineTimestamp: baselineTimestamp, state: frame.state)
+        #endif
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.finishPublication() }
+            guard !self.isFrozen else { return }
+            if changed { self.presentation = preparedFrame }
+            #if DEBUG
+            if self.diagnostics != newDiagnostics { self.diagnostics = newDiagnostics }
+            #endif
+        }
+    }
+
+    private func finishPublication() {
+        publicationLock.lock()
+        publicationPending = false
+        publicationLock.unlock()
+    }
+
+    /// The same canonical builder and coordinate contract as the former view
+    /// expression, prepared on the poll queue instead of during SwiftUI body.
+    static func canonicalProjection(
+        for state: LiveNotationTrackingState,
+        mixerFaders: ScratchMixerFaderEvidence?
+    ) -> ReferenceTearCanonicalProjection {
+        var events = continuousRenderedEvents(for: state)
+        var trajectory: [CaptureCore.PlatterTrajectorySegment] = []
+        var intervals: [CaptureCore.PlatterEvidenceInterval] = []
+        var derivation: CrossfaderDerivation?
+        var coordinates: CaptureCore.PlatterNotationCoordinates = .normalizedTakeLocal(
+            reference: "continuous window-normalised platter telemetry for the canonical Tear projection")
+        if case .tracking(_, _, let continuous, _, let segments, let evidenceIntervals, let fader, let period) = state {
+            trajectory = segments
+            intervals = evidenceIntervals
+            derivation = fader
+            if continuous.first?.source == PhaseDVSRecordingEvidence.source {
+                events = continuous
+                coordinates = .normalizedTakeLocal(reference: PhaseDVSRecordingEvidence.coordinateReference)
+            } else if period != nil {
+                coordinates = .raneOneMKIIDirectMIDI()
+            }
+        }
+        return ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: events, platterTrajectorySegments: trajectory,
+            platterEvidenceIntervals: intervals, derivation: derivation,
+            coordinates: coordinates
+        ).applyingMixerFaders(mixerFaders)
     }
 
     /// A window transition between motion and mixer reads must not combine
@@ -549,6 +634,12 @@ final class LivePerformedNotationTracker: ObservableObject {
         dataSource: LivePerformedNotationDataSource,
         baselineTimestamp: Double
     ) -> LiveNotationTrackingState {
+        if let motion = dataSource.phaseMotion() {
+            return .tracking(committed: motion.events, provisional: nil,
+                continuousCommitted: motion.events, continuousProvisional: nil,
+                trajectorySegments: motion.trajectorySegments, platterEvidenceIntervals: motion.intervals,
+                faderDerivation: nil, wrapPeriod: nil)
+        }
         let sourceName = dataSource.selectedMIDISourceName()
         let trimmedSourceName = sourceName.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasControllerSource = !trimmedSourceName.isEmpty && trimmedSourceName != "Not Connected"

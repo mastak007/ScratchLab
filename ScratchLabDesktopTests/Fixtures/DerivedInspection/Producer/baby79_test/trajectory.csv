@@ -1,0 +1,4 @@
+frame,timestamp_s,raw_angle_deg,unwrapped_angle_deg,smoothed_angle_deg,angular_velocity_deg_s_ccw_positive,signed_velocity_deg_s_forward_positive,direction,visual_confidence,marker_pixel_count,interpolated
+0,18.000000,104.999490,104.999490,105.756596,44.846190,-44.846190,REVERSE,0.997532,145,False
+7,18.116783,113.751363,113.751363,113.191937,21.623833,-21.623833,STILL,0.985107,141,False
+26,18.433767,25.352124,25.352124,26.819388,28.255763,-28.255763,STILL,0.898272,244,False

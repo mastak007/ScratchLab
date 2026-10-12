@@ -1,0 +1,6 @@
+frame,timestamp_s,raw_angle_deg,unwrapped_angle_deg,smoothed_angle_deg,angular_velocity_deg_s_ccw_positive,signed_velocity_deg_s_forward_positive,direction,visual_confidence,marker_pixel_count,interpolated
+0,24.000000,43.774512,43.774512,42.467284,-90.515322,90.515322,FORWARD,0.988832,182,False
+10,24.166833,5.877670,5.877670,11.858127,19.207120,-19.207120,STILL,0.571962,359,False
+62,25.034367,,,,,,UNKNOWN,0.383785,483,False
+238,27.970633,,,-0.701581,-1394.138571,1394.138571,UNKNOWN,0.413796,434,True
+359,29.989317,107.795129,107.795129,107.710163,4.565388,-4.565388,STILL,0.997224,153,False

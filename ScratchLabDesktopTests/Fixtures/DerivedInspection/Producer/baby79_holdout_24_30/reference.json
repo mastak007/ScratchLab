@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "platterSource": "videoDerived",
+  "hardwareGroundTruth": false,
+  "canonicalReference": false,
+  "source": {
+    "input": "/Users/user/Developer/ScratchLab-Platter-POC/baby2.zip",
+    "video": "angle_3_video.mkv",
+    "angle": "angle_3",
+    "datasetMetadata": {
+      "audioStreamIndex": 2,
+      "audioStreamRole": "noBeat",
+      "beatMode": "noBeat",
+      "bpm": 79,
+      "bpmSource": "folder_name",
+      "cameraAngle": "angle_3",
+      "cameraAngleCount": 4,
+      "confidence": 0.9,
+      "datasetItemID": "79408a15b57e5e46ac7e683261669abb",
+      "hasAudio": true,
+      "hasExtractedWav": true,
+      "hasVideo": true,
+      "labelSource": "folder_name_makemkv_ingest",
+      "linkedVideoFile": "angle_3_video.mkv",
+      "notes": "",
+      "originalFile": "Baby_79bpm/title_t02.mkv",
+      "performer": "Qbert",
+      "reviewStatus": "needs_review",
+      "scratchDisplayName": "Baby",
+      "scratchType": "baby",
+      "sourceCollection": "qbert_makemkv_dvd",
+      "sourceFolder": "Baby_79bpm",
+      "sourceMKV": "Baby_79bpm/title_t02.mkv",
+      "sourceType": "makemkv_dvd_rip",
+      "trainingUse": "primary_training"
+    }
+  },
+  "video": {
+    "width": 720,
+    "height": 480,
+    "sourceFPS": 29.97002997002997,
+    "fieldOrder": "bb",
+    "deinterlaced": true,
+    "analysisFPS": 59.94005994005994,
+    "analysisStartSeconds": 24.0,
+    "analysisDurationSeconds": 6.0
+  },
+  "tracking": {
+    "centerX": 564.0,
+    "centerY": 166.0,
+    "innerRadius": 10.0,
+    "outerRadius": 55.0,
+    "hsv": {
+      "hueLow": 95,
+      "hueHigh": 135,
+      "saturationLow": 50,
+      "valueLow": 20
+    },
+    "minimumVisualConfidence": 0.45,
+    "validFrameFraction": 0.9777777777777777,
+    "medianValidFrameConfidence": 0.9922452926954779,
+    "forwardSign": -1,
+    "velocityThresholdDegreesPerSecond": 35.0
+  },
+  "turnarounds": [
+    {
+      "frame": 10,
+      "timeSeconds": 24.166833333333333,
+      "kind": "FORWARD_TO_REVERSE"
+    }
+  ]
+}

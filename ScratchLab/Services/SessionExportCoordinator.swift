@@ -3788,7 +3788,7 @@ struct SessionArchiveBuilder: Sendable {
             let audioProjection = try SessionExportAudioProjection.writePlayableStereo(
                 from: audioArtifactURL,
                 to: audioURL,
-                preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                preferredPair: takeContext.sidecar.phaseDVSEvidence != nil ? .init(firstChannelIndex: 0, secondChannelIndex: 1) : RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
                     forDeviceName: takeContext.sidecar.audioDeviceName,
                     deviceUniqueID: takeContext.sidecar.audioDeviceUniqueID
                 )
@@ -4820,7 +4820,21 @@ struct SessionArchiveBuilder: Sendable {
         sidecar: CaptureCore.LocalRecordingSidecar, mediaURL: URL,
         sidecarURL: URL, takeNumber: Int
     ) throws -> [BoundBeatExportArtifact] {
-        guard let binding = sidecar.sessionConfig?.referenceCaptureIntent?.beatSpec else { return [] }
+        var phaseArtifacts: [BoundBeatExportArtifact] = []
+        if let phase = sidecar.phaseDVSEvidence {
+            guard phase.sessionID == sidecar.sessionID, phase.takeID == sidecar.takeID,
+                  phase.deviceUID == sidecar.audioDeviceUniqueID,
+                  try phase.motionEvidence().events == sidecar.detectedNotation?.recordMovementEvents else {
+                throw SessionExportError.invalidSessionMetadata
+            }
+            let raw = try phase.verifiedControlURL(beside: mediaURL)
+            let prefix = "phase_assets/take_\(CaptureCore.LocalRecordingNaming.paddedTakeNumber(takeNumber))"
+            phaseArtifacts = [
+                .init(source: "phase_dvs_control", relativePath: "\(prefix)/\(raw.lastPathComponent)", sourceURL: raw),
+                .init(source: "phase_dvs_sidecar", relativePath: "\(prefix)/take_sidecar.json", sourceURL: sidecarURL)
+            ]
+        }
+        guard let binding = sidecar.sessionConfig?.referenceCaptureIntent?.beatSpec else { return phaseArtifacts }
         try SessionExportHumanReview.validate(sidecar)
         let prepared = try ReferenceBeatAssetStore.resolve(
             binding: binding,
@@ -4833,7 +4847,7 @@ struct SessionArchiveBuilder: Sendable {
             ("reference_beat_manifest", prepared.manifestURL),
             ("reference_beat_rights", prepared.rightsReceiptURL)
         ]
-        return assets.map { source, url in
+        return phaseArtifacts + assets.map { source, url in
             BoundBeatExportArtifact(source: source, relativePath: "\(prefix)/\(url.lastPathComponent)", sourceURL: url)
         } + [BoundBeatExportArtifact(
             source: "reference_take_sidecar",
@@ -6560,7 +6574,7 @@ struct SessionArchiveBuilder: Sendable {
         ) {
             let data = try Data(contentsOf: artifact.sourceURL)
             let probe: [String: SessionExportProbeValue]
-            if artifact.source == "reference_beat_master" || artifact.source == "reference_beat_analysis" {
+            if artifact.source == "reference_beat_master" || artifact.source == "reference_beat_analysis" || artifact.source == "phase_dvs_control" {
                 probe = try probeAudio(url: artifact.sourceURL)
             } else {
                 guard (try? JSONSerialization.jsonObject(with: data)) != nil else {
@@ -6623,7 +6637,7 @@ struct SessionArchiveBuilder: Sendable {
         let audioProjection = try SessionExportAudioProjection.writePlayableStereo(
             from: audioArtifactURL,
             to: projectedAudioURL,
-            preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+            preferredPair: context.sidecar.phaseDVSEvidence != nil ? .init(firstChannelIndex: 0, secondChannelIndex: 1) : RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
                 forDeviceName: context.sidecar.audioDeviceName,
                 deviceUniqueID: context.sidecar.audioDeviceUniqueID
             )

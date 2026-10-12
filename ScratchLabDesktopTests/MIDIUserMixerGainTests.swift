@@ -1713,3 +1713,70 @@ extension SeparateMixerFaderEvidenceTests {
         }
     }
 }
+
+
+extension SeparateMixerFaderEvidenceTests {
+    func testPreparedMixerSpansMatchPerRangeDerivationAcrossBoundariesAndUnknowns() throws {
+        for heldChannel in [nil, 0, 127] as [Int?] {
+            var recorder = recorder(channel: heldChannel)
+            recorder.observe(control: .crossfader, binding: binding(), rawValue: 0, at: 10.5, admitted: true)
+            recorder.invalidate(.rightChannel, at: 11)
+            recorder.observe(control: .rightChannel, binding: binding(), rawValue: 64, at: 11.5, admitted: true)
+            recorder.observe(control: .crossfader, binding: binding(), rawValue: 127, at: 12, admitted: true)
+            recorder.close(at: 13)
+            let evidence = try XCTUnwrap(recorder.snapshot(at: 14))
+            let full = evidence.combinedSpans(in: -1...4)
+            for start in stride(from: -1.0, through: 3.5, by: 0.125) {
+                let range = start...(start + 0.5)
+                XCTAssertEqual(ScratchMixerFaderEvidence.Span.clipped(full, to: range),
+                               evidence.combinedSpans(in: range), "range \(range)")
+            }
+        }
+    }
+
+    func testBatchedMixerProjectionPreservesRecordsAndReportsDenseHistoryCost() throws {
+        var r = recorder()
+        for index in 0..<16_000 {
+            r.observe(control: index.isMultiple(of: 2) ? .crossfader : .rightChannel,
+                      binding: binding(), rawValue: (index / 5) % 128,
+                      at: 10 + Double(index) / 1000, admitted: true)
+        }
+        r.close(at: 26)
+        let evidence = try XCTUnwrap(r.snapshot(at: 26))
+        let motion = ScratchNotation.GestureRecord.Evidence(provenance: .measured,
+            observation: .init(source: .platterTimeline, confidence: 1, reason: "synthetic performance fixture"))
+        let records = (0..<100).map { index -> ScratchNotation.GestureRecord in
+            let start = 12 + Double(index) * 0.03
+            return .init(id: "gesture-\(index)", direction: .forward, timingDomain: .seconds,
+                coordinateSpace: .normalizedTakeLocalDisplacement, evidence: motion,
+                subdivisions: [.init(id: "travel-\(index)", span: .init(startTime: start, endTime: start + 0.03),
+                    evidence: motion, measuredCurve: .init(points: [.init(time: start, position: 0),
+                        .init(time: start + 0.03, position: 1)], evidence: motion))])
+        }
+        let projection = ReferenceTearCanonicalProjection(records: records, timeRange: 12...15,
+            positionRange: 0...1, coordinateSpace: .normalizedTakeLocalDisplacement, reasons: [])
+        let perRecord = records.map { record in
+            ReferenceTearCanonicalProjection(records: [record], timeRange: projection.timeRange,
+                positionRange: projection.positionRange, coordinateSpace: projection.coordinateSpace,
+                reasons: []).applyingMixerFaders(evidence).records[0]
+        }
+        let batched = projection.applyingMixerFaders(evidence)
+        XCTAssertEqual(batched.records, perRecord)
+        XCTAssertEqual(batched.records.map(\.subdivisions), records.map(\.subdivisions))
+        XCTAssertEqual(batched, try JSONDecoder().decode(ReferenceTearCanonicalProjection.self,
+            from: JSONEncoder().encode(batched)))
+        // Time only the changed span work: both paths consume the same
+        // observations and produce the same per-gesture spans. Projection
+        // reason validation and encoding are outside this comparison.
+        let ranges = records.map { $0.subdivisions.first!.span.startTime...$0.subdivisions.last!.span.endTime }
+        let oldStart = CACurrentMediaTime()
+        let individualSpans = ranges.map { evidence.combinedSpans(in: $0) }
+        let oldDuration = CACurrentMediaTime() - oldStart
+        let newStart = CACurrentMediaTime()
+        let combined = evidence.combinedSpans(in: ranges.first!.lowerBound...ranges.last!.upperBound)
+        let batchedSpans = ranges.map { ScratchMixerFaderEvidence.Span.clipped(combined, to: $0) }
+        let newDuration = CACurrentMediaTime() - newStart
+        XCTAssertEqual(batchedSpans, individualSpans)
+        print("CPU_REPAIR_SPAN_BENCHMARK synthetic 16000 observations, 100 records: per-record=\(oldDuration)s batched=\(newDuration)s")
+    }
+}

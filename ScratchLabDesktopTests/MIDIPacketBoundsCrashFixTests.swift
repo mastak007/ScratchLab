@@ -30,6 +30,7 @@
 // boundary, no SysEx state carried into the next packet.
 
 import CoreMIDI
+import CoreAudio
 import XCTest
 @testable import ScratchLab
 
@@ -119,6 +120,73 @@ private final class DefensiveOversizedPacketListFixture {
 }
 
 final class MIDIPacketBoundsCrashFixTests: XCTestCase {
+
+    func testTimingDiagnosticPreservesNativeCallbackPacketAndMessageOrder() throws {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.testOnly_startMIDITimingDiagnostic()
+        let first = MIDIPacketListFixture(packets: [
+            [[0xB1, 0x06, 27], [0xE1, 0x14, 0x40]],
+            [[0xB1, 0x06, 31]],
+        ])
+        let second = MIDIPacketListFixture(packets: [[[0xB1, 0x06, 30]]])
+        engine.testOnly_receiveMIDIPacketList(first.pointer)
+        engine.testOnly_receiveMIDIPacketList(second.pointer)
+        let recording = try XCTUnwrap(engine.testOnly_finishMIDITimingDiagnostic())
+        XCTAssertFalse(recording.overflowed)
+        XCTAssertEqual(recording.packets.count, 3)
+        XCTAssertEqual(recording.packets.map(\.callbackID), [1, 1, 2])
+        XCTAssertEqual(recording.packets.map(\.packetIndex), [0, 1, 0])
+        XCTAssertEqual(recording.packets.map(\.packetHostTime), [0, 1, 0])
+        XCTAssertNil(recording.packets[0].packetNanoseconds)
+        XCTAssertEqual(recording.packets[1].packetNanoseconds,
+                       MIDITimingDiagnosticClock.nanoseconds(for: 1))
+        XCTAssertEqual(recording.packets[0].callbackReceiptHostTime,
+                       recording.packets[1].callbackReceiptHostTime)
+        XCTAssertEqual(recording.packets[0].callbackReceiptNanoseconds,
+                       recording.packets[1].callbackReceiptNanoseconds)
+        XCTAssertGreaterThan(recording.packets[0].callbackReceiptNanoseconds, 0)
+        XCTAssertEqual(recording.packets.flatMap(\.messages).map(\.applicationSequence), [1, 2, 3, 4])
+        XCTAssertEqual(recording.packets[0].messages.map(\.messageIndex), [0, 1])
+        XCTAssertEqual(recording.packets[0].messages.map(\.status), [0xB1, 0xE1])
+        XCTAssertEqual(recording.packets[0].messages.map(\.channel), [1, 1])
+        XCTAssertEqual(recording.packets[0].messages.map(\.controllerNumber), [6, nil])
+        XCTAssertEqual(recording.packets[0].messages.map(\.controllerValue), [27, nil])
+        XCTAssertEqual(recording.packets[0].rawBytes, [0xB1, 0x06, 27, 0xE1, 0x14, 0x40])
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let restored = try decoder.decode(MIDITimingDiagnosticRecording.self, from: encoder.encode(recording))
+        XCTAssertEqual(restored.packets.map(\.callbackID), [1, 1, 2])
+        XCTAssertEqual(restored.packets[0].messages.map(\.status), [0xB1, 0xE1])
+    }
+
+    func testTimingDiagnosticHostClockConversionIsDeterministic() {
+        XCTAssertNil(MIDITimingDiagnosticClock.nanoseconds(for: 0))
+        let first = AudioGetCurrentHostTime()
+        let second = first + 1_000_000
+        XCTAssertEqual(MIDITimingDiagnosticClock.nanoseconds(for: first),
+                       AudioConvertHostTimeToNanos(first))
+        XCTAssertEqual(MIDITimingDiagnosticClock.nanoseconds(for: first),
+                       MIDITimingDiagnosticClock.nanoseconds(for: first))
+        XCTAssertGreaterThan(try! XCTUnwrap(MIDITimingDiagnosticClock.nanoseconds(for: second)),
+                             try! XCTUnwrap(MIDITimingDiagnosticClock.nanoseconds(for: first)))
+    }
+
+    func testTimingDiagnosticLeavesPlatterInterpretationUnchanged() {
+        let normal = MacCaptureEngine(autoRefreshDevices: false)
+        let observed = MacCaptureEngine(autoRefreshDevices: false)
+        observed.testOnly_startMIDITimingDiagnostic()
+        let fixture = MIDIPacketListFixture(packets: [
+            [[0xB1, 0x06, 127], [0xE1, 0x01, 0x02]],
+            [[0xB1, 0x06, 0], [0xB1, 0x06, 1], [0xB1, 0x06, 0]],
+        ])
+        normal.testOnly_receiveMIDIPacketList(fixture.pointer)
+        observed.testOnly_receiveMIDIPacketList(fixture.pointer)
+        XCTAssertEqual(normal.testOnly_platterSteps(for: 1), observed.testOnly_platterSteps(for: 1))
+        XCTAssertEqual(observed.testOnly_platterSteps(for: 1), 1)
+        XCTAssertEqual(observed.testOnly_finishMIDITimingDiagnostic()?.packets.flatMap(\.messages).count, 5)
+    }
 
     /// Proves the `MemoryLayout` field offsets the production fix (and the
     /// defensive fixture above) rely on actually match this SDK's imported

@@ -7764,6 +7764,30 @@ struct MacAnalyzerView: View {
             midiSourcePickerRow
 
             HStack(spacing: 8) {
+                Button(captureEngine.isMIDITimingDiagnosticRecording ? "Stop timing diagnostic" : "Record MIDI timing") {
+                    if captureEngine.isMIDITimingDiagnosticRecording {
+                        captureEngine.stopMIDITimingDiagnostic()
+                    } else {
+                        captureEngine.startMIDITimingDiagnostic()
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(captureEngine.isSavingMIDITimingDiagnostic)
+                if let url = captureEngine.midiTimingDiagnosticURL {
+                    Button("Reveal JSON") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+                Text(captureEngine.midiTimingDiagnosticStatus)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            Text("Diagnostic only: records packet timing and adjacent MIDI messages; platter playback is unchanged.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
                 testLabMetricBadge(title: "State", value: captureEngine.midiListeningState, color: captureEngine.availableMIDISources.isEmpty ? .secondary : ScratchLabDesign.Sem.success)
                 testLabMetricBadge(title: "Events received", value: "\(captureEngine.midiEventsReceivedCount)", color: captureEngine.midiEventsReceivedCount == 0 ? .secondary : ScratchLabDesign.Sem.success)
             }

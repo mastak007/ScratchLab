@@ -8,6 +8,44 @@
 
 `build_coach_demo_audio.py` is a small helper for refreshing bundled ScratchLab Coach demo WAVs from local development-only media. Its development manifest stays beside the script and must not be bundled.
 
+## Existing derived evidence → inspection JSON
+
+`ingest_media_scratch.py derived-inspection` is an offline serialization command,
+not another MKV/DVD extractor. It reads the existing POC reference/trajectory,
+Audio V2 and AV-lag reports. It does not run ffmpeg, detectors, gates, filtering,
+dataset processing or the reference-library rebuild.
+
+```sh
+python3 scripts/dataset_processor/ingest_media_scratch.py derived-inspection \
+  --evidence-root /path/to/baby79_test \
+  --performance-id qbert_makemkv_dvd/Baby_79bpm \
+  --output /existing/output/folder/baby79_test.inspection.json
+```
+
+Use that **same performance ID** for `baby79_holdout_24_30`. An embedded
+`source.performanceID`, dataset-metadata or manifest performance ID is preserved;
+conflicting declarations are rejected. With none present, `--performance-id` is
+required. It is an operator-supplied identity, not proof of independent sessions.
+
+Required paths under `--evidence-root`:
+
+- `reference.json` (POC schema 1, authoritative analysis clock/source metadata)
+- `trajectory.csv` (vision samples; no FPS estimation)
+- `audio_evidence_poc_v2/audio_fusion.csv`
+- `audio_evidence_poc_v2/audio_turnaround_evidence.json` (schema 2)
+- `av_lag_poc/av_lag_report.json` (schema 1)
+
+`--video-only` explicitly reads only the first two files; missing audio never
+silently triggers this mode. Output is `scratchlab_derived_reference_inspection_v1`
+for `ReferencePackageIO.readDerivedInspection(at:)`, with false hardware/canonical
+flags and `needsReview`. Historical `trainingUse` remains inert provenance.
+The output parent must exist, must be outside the evidence tree, and the output
+file must not already exist. There is deliberately no overwrite/force option.
+
+See [the inspection contract](../../docs/derived_reference_inspection.md) for
+field mapping, projection limits and verification. Python 3.9+; standard library
+only. No app resource, source media, rights or reviewer authentication is involved.
+
 ## Supported Inputs
 
 The processor accepts two source types under one input folder:

@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "modifiesVisionTrajectory": false,
+  "sourceCSV": "/Users/user/Developer/ScratchLab-Platter-POC/baby79_holdout_24_30/audio_evidence_poc_v2/audio_fusion.csv",
+  "analysisFPS": 59.94125756758216,
+  "features": {
+    "audioMotionNorm": {
+      "visionGated": {
+        "bestPearson": {
+          "lagFields": 1,
+          "pairs": 258,
+          "pearson": 0.5358824834399716,
+          "spearman": 0.6987815169473577
+        },
+        "bestSpearman": {
+          "lagFields": 1,
+          "pairs": 258,
+          "pearson": 0.5358824834399716,
+          "spearman": 0.6987815169473577
+        }
+      },
+      "visionGatedHighConfidence": {
+        "bestPearson": {
+          "lagFields": 1,
+          "pairs": 212,
+          "pearson": 0.702407161476815,
+          "spearman": 0.8198923951596684
+        },
+        "bestSpearman": {
+          "lagFields": 1,
+          "pairs": 212,
+          "pearson": 0.702407161476815,
+          "spearman": 0.8198923951596684
+        }
+      }
+    },
+    "audioSpectralFlux": {
+      "visionGated": {
+        "bestPearson": {
+          "lagFields": 2,
+          "pairs": 257,
+          "pearson": 0.42225652176005585,
+          "spearman": 0.556457701791693
+        },
+        "bestSpearman": {
+          "lagFields": 2,
+          "pairs": 257,
+          "pearson": 0.42225652176005585,
+          "spearman": 0.556457701791693
+        }
+      },
+      "visionGatedHighConfidence": {
+        "bestPearson": {
+          "lagFields": 2,
+          "pairs": 206,
+          "pearson": 0.6285805066702373,
+          "spearman": 0.6297267894586923
+        },
+        "bestSpearman": {
+          "lagFields": 2,
+          "pairs": 206,
+          "pearson": 0.6285805066702373,
+          "spearman": 0.6297267894586923
+        }
+      }
+    }
+  }
+}

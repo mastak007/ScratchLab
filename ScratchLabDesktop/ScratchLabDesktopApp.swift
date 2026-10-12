@@ -18,17 +18,50 @@ enum CXLReleaseRouteContract {
     static let stages = ["Setup", "Capture", "Review & Export"]
 }
 
+/// Retains app-wide services without forwarding their live publications into
+/// every window. Each consuming view observes the service it actually displays.
+@MainActor
+final class ScratchLabDesktopServices: ObservableObject {
+    let relayedWatchCaptureStore: RelayedWatchCaptureStore
+    let captureEngine: MacCaptureEngine
+    let companionReceiver: CompanionCameraReceiver
+    let performerBroadcaster: PerformerMonitorBroadcaster
+    let sessionUploadManager: SessionUploadManager
+    let routineSessionStore: RoutineSessionStore
+    let progressManager: ProgressManager
+    let practiceBeatStore = PracticeBeatStore()
+
+    init(isRunningTests: Bool, activateAuxiliaryServices: Bool) {
+        let watchCaptureStore = RelayedWatchCaptureStore()
+        relayedWatchCaptureStore = watchCaptureStore
+        captureEngine = MacCaptureEngine(
+            autoRefreshDevices: !isRunningTests,
+            allowsSeratoDirectCaptureDiscovery: activateAuxiliaryServices,
+            prefersPhysicalCaptureAudio: true
+        )
+        companionReceiver = CompanionCameraReceiver(
+            relayedWatchCaptureStore: watchCaptureStore,
+            autoStartBrowsing: activateAuxiliaryServices
+        )
+        performerBroadcaster = PerformerMonitorBroadcaster(startImmediately: activateAuxiliaryServices)
+        sessionUploadManager = SessionUploadManager(activateImmediately: activateAuxiliaryServices)
+        routineSessionStore = RoutineSessionStore()
+        progressManager = ProgressManager()
+    }
+}
+
 @main
 struct ScratchLabDesktopApp: App {
-    @StateObject private var relayedWatchCaptureStore: RelayedWatchCaptureStore
-    @StateObject private var captureEngine: MacCaptureEngine
-    @StateObject private var companionReceiver: CompanionCameraReceiver
-    @StateObject private var performerBroadcaster: PerformerMonitorBroadcaster
-    @StateObject private var sessionUploadManager: SessionUploadManager
-    @StateObject private var routineSessionStore: RoutineSessionStore
-    @StateObject private var progressManager: ProgressManager
-    @StateObject private var practiceBeatStore = PracticeBeatStore()
+    @StateObject private var services: ScratchLabDesktopServices
 
+    private var relayedWatchCaptureStore: RelayedWatchCaptureStore { services.relayedWatchCaptureStore }
+    private var captureEngine: MacCaptureEngine { services.captureEngine }
+    private var companionReceiver: CompanionCameraReceiver { services.companionReceiver }
+    private var performerBroadcaster: PerformerMonitorBroadcaster { services.performerBroadcaster }
+    private var sessionUploadManager: SessionUploadManager { services.sessionUploadManager }
+    private var routineSessionStore: RoutineSessionStore { services.routineSessionStore }
+    private var progressManager: ProgressManager { services.progressManager }
+    private var practiceBeatStore: PracticeBeatStore { services.practiceBeatStore }
     private let isRunningTests: Bool
 
     init() {
@@ -39,29 +72,10 @@ struct ScratchLabDesktopApp: App {
         #else
         let activateAuxiliaryServices = !isRunningTests
         #endif
-        let watchCaptureStore = RelayedWatchCaptureStore()
-        _relayedWatchCaptureStore = StateObject(wrappedValue: watchCaptureStore)
-        _captureEngine = StateObject(
-            wrappedValue: MacCaptureEngine(
-                autoRefreshDevices: !isRunningTests,
-                allowsSeratoDirectCaptureDiscovery: activateAuxiliaryServices,
-                prefersPhysicalCaptureAudio: true
-            )
-        )
-        _companionReceiver = StateObject(
-            wrappedValue: CompanionCameraReceiver(
-                relayedWatchCaptureStore: watchCaptureStore,
-                autoStartBrowsing: activateAuxiliaryServices
-            )
-        )
-        _performerBroadcaster = StateObject(
-            wrappedValue: PerformerMonitorBroadcaster(startImmediately: activateAuxiliaryServices)
-        )
-        _sessionUploadManager = StateObject(
-            wrappedValue: SessionUploadManager(activateImmediately: activateAuxiliaryServices)
-        )
-        _routineSessionStore = StateObject(wrappedValue: RoutineSessionStore())
-        _progressManager = StateObject(wrappedValue: ProgressManager())
+        _services = StateObject(wrappedValue: ScratchLabDesktopServices(
+            isRunningTests: isRunningTests,
+            activateAuxiliaryServices: activateAuxiliaryServices
+        ))
     }
 
     var body: some Scene {

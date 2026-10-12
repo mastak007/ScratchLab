@@ -26,6 +26,7 @@ struct ScratchPhraseChartView: View {
         case canonical([ScratchNotation.GestureRecord],
                        layer: ScratchStrokeGeometry.CanonicalLayer,
                        frame: ScratchStrokeGeometry.CanonicalFrame)
+        case preparedCanonical(ScratchStrokeGeometry.PreparedCanonicalChart)
         case empty(String)
     }
 
@@ -121,7 +122,7 @@ struct ScratchPhraseChartView: View {
             ScratchLabPerformanceSignpost.event("CapturedNotationRender", count: events.count)
         case .performedPlatter(let events):
             ScratchLabPerformanceSignpost.event("PerformedPlatterRender", count: events.count)
-        case .canonical:
+        case .canonical, .preparedCanonical:
             break
         case .empty:
             break
@@ -134,6 +135,8 @@ struct ScratchPhraseChartView: View {
             case .performedPlatter(let events):   drawPerformedPlatter(ctx: ctx, size: size, events: events)
             case .canonical(let records, let layer, let frame):
                 drawCanonical(ctx: ctx, size: size, records: records, layer: layer, frame: frame)
+            case .preparedCanonical(let prepared):
+                drawCanonical(ctx: ctx, size: size, prepared: prepared, beatsPerMinute: bpm)
             case .empty(let message):             drawEmpty(ctx: ctx, size: size, message: message)
             }
         }
@@ -146,16 +149,24 @@ struct ScratchPhraseChartView: View {
                                records: [ScratchNotation.GestureRecord],
                                layer: ScratchStrokeGeometry.CanonicalLayer,
                                frame: ScratchStrokeGeometry.CanonicalFrame) {
-        let geometry = ScratchStrokeGeometry.canonicalGeometry(
-            records: records, layer: layer, frame: frame, wrapPeriod: wrapPeriod
-        )
+        drawCanonical(ctx: ctx, size: size, prepared: .init(records: records, layer: layer,
+            frame: frame, wrapPeriod: wrapPeriod,
+            mixerFaders: showsMixerFaderLanes ? mixerFaders : nil))
+    }
+
+    private func drawCanonical(ctx: GraphicsContext, size: CGSize,
+                               prepared: ScratchStrokeGeometry.PreparedCanonicalChart,
+                               beatsPerMinute: Double? = nil) {
+        let frame = prepared.frame
+        let layer = prepared.layer
+        let geometry = prepared.geometry
         let start = frame.timeRange.lowerBound
         let duration = frame.timeRange.upperBound - start
         let pps = size.width / CGFloat(duration)
         let platterHeight = size.height * (showsMixerFaderLanes ? 0.55 : (1 - faderLaneFraction))
         let style: ScratchMotionRenderer.Style = layer == .target ? .target : .performance
         drawBeatGrid(ctx: ctx, size: size, startTime: start, duration: duration, pps: pps,
-                     labelBottomY: platterHeight - 2, beatsPerMinute: frame.beatsPerMinute)
+                     labelBottomY: platterHeight - 2, beatsPerMinute: beatsPerMinute ?? frame.beatsPerMinute)
         let viewport = LaneViewport(size: CGSize(width: size.width, height: platterHeight),
                                     now: start, axis: .horizontal, actionLineFraction: 0,
                                     secondsAhead: duration)
@@ -171,7 +182,7 @@ struct ScratchPhraseChartView: View {
         if showsMixerFaderLanes {
             let laneHeight = (size.height - platterHeight) / 2
             for (index, control) in ScratchMixerFaderEvidence.Control.allCases.enumerated() {
-                let spans = mixerFaders?.spans(for: control, in: frame.timeRange)
+                let spans = prepared.mixerSpans?[control]
                     ?? (control == .crossfader
                         ? geometry.fader.map { .init(start: $0.range.lowerBound, end: $0.range.upperBound,
                             gain: $0.state.map { $0 == .closed ? 0 : 1 }) }
@@ -180,8 +191,8 @@ struct ScratchPhraseChartView: View {
                     start: start, pps: pps, top: platterHeight + CGFloat(index) * laneHeight,
                     height: laneHeight, color: style.color)
             }
-            if let mixerFaders {
-                for span in mixerFaders.combinedSpans(in: frame.timeRange) where span.state == .closed {
+            if let combinedSpans = prepared.combinedMixerSpans {
+                for span in combinedSpans where span.state == .closed {
                     let width = CGFloat(span.end - span.start) * pps
                     if width >= 32 {
                         ctx.draw(Text("MUTED").font(.system(size: 8, weight: .medium, design: .monospaced))

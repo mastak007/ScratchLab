@@ -11,6 +11,178 @@ import Accelerate
 import CoreImage
 import ImageIO
 
+/// Passive CoreMIDI timing capture. This is separate from RawMixerMIDIEvent,
+/// take evidence, MIDI Learn, and the live platter/audio path.
+struct MIDITimingDiagnosticRecording: Codable, Sendable {
+    struct Message: Codable, Sendable {
+        let applicationSequence: UInt64
+        let messageIndex: Int
+        let status: UInt8
+        let channel: UInt8
+        let data1: UInt8
+        let data2: UInt8?
+        var controllerNumber: UInt8? { status & 0xF0 == 0xB0 ? data1 : nil }
+        var controllerValue: UInt8? { status & 0xF0 == 0xB0 ? data2 : nil }
+
+        private enum CodingKeys: String, CodingKey {
+            case applicationSequence, messageIndex, status, channel, data1, data2,
+                 controllerNumber, controllerValue
+        }
+
+        init(applicationSequence: UInt64, messageIndex: Int,
+             status: UInt8, data1: UInt8, data2: UInt8?) {
+            self.applicationSequence = applicationSequence
+            self.messageIndex = messageIndex
+            self.status = status
+            self.channel = status & 0x0F
+            self.data1 = data1
+            self.data2 = data2
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            try values.encode(applicationSequence, forKey: .applicationSequence)
+            try values.encode(messageIndex, forKey: .messageIndex)
+            try values.encode(status, forKey: .status)
+            try values.encode(channel, forKey: .channel)
+            try values.encode(data1, forKey: .data1)
+            try values.encodeIfPresent(data2, forKey: .data2)
+            try values.encodeIfPresent(controllerNumber, forKey: .controllerNumber)
+            try values.encodeIfPresent(controllerValue, forKey: .controllerValue)
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(applicationSequence: try values.decode(UInt64.self, forKey: .applicationSequence),
+                      messageIndex: try values.decode(Int.self, forKey: .messageIndex),
+                      status: try values.decode(UInt8.self, forKey: .status),
+                      data1: try values.decode(UInt8.self, forKey: .data1),
+                      data2: try values.decodeIfPresent(UInt8.self, forKey: .data2))
+        }
+    }
+
+    struct Packet: Codable, Sendable {
+        let callbackID: UInt64
+        let packetIndex: Int
+        let endpoint: UInt32
+        let sourceIdentifier: String?
+        let sourceName: String
+        let connectionGeneration: UInt64
+        let packetHostTime: UInt64
+        let packetNanoseconds: UInt64?
+        let callbackReceiptHostTime: UInt64
+        let callbackReceiptNanoseconds: UInt64
+        let rawBytes: [UInt8]
+        var messages: [Message]
+    }
+
+    let schemaVersion: Int
+    let id: UUID
+    let startedAt: Date // Metadata only; never a movement clock.
+    let endedAt: Date
+    let clockDescription: String
+    let overflowed: Bool
+    let droppedPackets: Int
+    let packets: [Packet]
+}
+
+enum MIDITimingDiagnosticClock {
+    /// CoreMIDI MIDIPacket.timeStamp and AudioGetCurrentHostTime are mach host
+    /// ticks. CoreAudio converts them to monotonic integer nanoseconds; zero
+    /// packet time means unspecified and is retained as nil, never receipt time.
+    static func nanoseconds(for hostTime: UInt64) -> UInt64? {
+        hostTime == 0 ? nil : AudioConvertHostTimeToNanos(hostTime)
+    }
+}
+
+/// Bounded RAM buffer. Disk encoding/writing happens only after finish().
+final class MIDITimingDiagnosticRecorder {
+    struct Callback: Equatable {
+        let sessionID: UUID
+        let id: UInt64
+    }
+
+    private final class Session {
+        let id = UUID()
+        let startedAt = Date()
+        var nextCallbackID: UInt64 = 0
+        var nextSequence: UInt64 = 0
+        var byteCount = 0
+        var packets: [MIDITimingDiagnosticRecording.Packet] = []
+        var overflowed = false
+        var droppedPackets = 0
+
+        init() { packets.reserveCapacity(16_384) }
+    }
+
+    private let lock = NSLock()
+    private var session: Session?
+    private let maximumPackets = 40_000
+    private let maximumBytes = 32 * 1_024 * 1_024
+
+    var isRecording: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return session != nil
+    }
+
+    @discardableResult func start() -> Bool {
+        let next = Session() // Reserve the bounded array off the MIDI callback lock.
+        lock.lock(); defer { lock.unlock() }
+        guard session == nil else { return false }
+        session = next
+        return true
+    }
+
+    func beginCallback() -> Callback? {
+        lock.lock(); defer { lock.unlock() }
+        guard let session else { return nil }
+        guard session.nextCallbackID < UInt64.max else {
+            session.overflowed = true
+            return nil
+        }
+        session.nextCallbackID += 1
+        return Callback(sessionID: session.id, id: session.nextCallbackID)
+    }
+
+    func append(_ packet: MIDITimingDiagnosticRecording.Packet, in callback: Callback) {
+        lock.lock(); defer { lock.unlock() }
+        guard let session, session.id == callback.sessionID else { return }
+        guard !session.overflowed,
+              packet.callbackID == callback.id,
+              session.packets.count < maximumPackets,
+              packet.rawBytes.count <= maximumBytes - session.byteCount,
+              session.nextSequence <= UInt64.max - UInt64(packet.messages.count) else {
+            session.overflowed = true
+            session.droppedPackets += 1
+            return
+        }
+        var retained = packet
+        retained.messages = packet.messages.enumerated().map { index, message in
+            MIDITimingDiagnosticRecording.Message(
+                applicationSequence: session.nextSequence + UInt64(index) + 1,
+                messageIndex: message.messageIndex,
+                status: message.status, data1: message.data1, data2: message.data2
+            )
+        }
+        session.nextSequence += UInt64(packet.messages.count)
+        session.byteCount += packet.rawBytes.count
+        session.packets.append(retained)
+    }
+
+    func finish() -> MIDITimingDiagnosticRecording? {
+        lock.lock(); defer { lock.unlock() }
+        guard let session else { return nil }
+        self.session = nil
+        return MIDITimingDiagnosticRecording(
+            schemaVersion: 1, id: session.id, startedAt: session.startedAt,
+            endedAt: Date(),
+            clockDescription: "CoreMIDI packet mach host ticks and AudioGetCurrentHostTime callback receipt ticks; AudioConvertHostTimeToNanos; monotonic nanoseconds, host-tick resolution",
+            overflowed: session.overflowed, droppedPackets: session.droppedPackets,
+            packets: session.packets
+        )
+    }
+}
+
 private enum ScratchLabDesktopDefaultsKey {
     static let selectedAudioDeviceUniqueID = "scratchlab.mac.selectedAudioDeviceUniqueID"
     static let selectedAudioDeviceWasExplicit = "scratchlab.mac.selectedAudioDeviceWasExplicit"
@@ -2971,6 +3143,138 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Platter-driven scratch sample playback controller.
     private let scratchPlaybackController: ScratchSamplePlaybackController
     private var tempDirectAhhhTriggerArmed = true
+    @Published private(set) var phaseCapturePath: PhaseCapturePath?
+    @Published private(set) var phaseInputStatus = "Phase input is not connected."
+    private let phaseInputLock = NSLock()
+    private var phaseInputUID: String?
+    private var phaseInputGeneration = UUID()
+    private var phaseInput: PhaseS9InputCapture?
+    private var phaseTakeMediaURL: URL?
+    private var phaseTakeFinalizing = false
+    private var phaseStopAfterTake = false
+    private var finalizedPhaseEvidence: PhaseDVSRecordingEvidence?
+
+    func phaseInputSnapshot() -> PhaseS9InputCapture.Snapshot? {
+        phaseInputLock.withLock { phaseInput?.snapshot() }
+    }
+
+    @MainActor
+    func selectExistingCapturePath() {
+        guard !isAudioInputSelectionLocked else { return }
+        phaseCapturePath = nil
+        phaseInputLock.withLock { phaseInputUID = nil; phaseInputGeneration = UUID() }
+        sessionQueue.async { [self] in
+            let input = phaseInputLock.withLock { let input = phaseInput; phaseInput = nil; return input }
+            do { try input?.stop() }
+            catch { Task { @MainActor in self.phaseInputStatus = error.localizedDescription } }
+        }
+    }
+
+    @MainActor
+    func enablePhaseInput() {
+        guard phaseCapturePath == .dvsThroughDJMS9, !isAudioInputSelectionLocked else { return }
+        let uid = selectedAudioDeviceUniqueID
+        let generation = self.phaseInputLock.withLock { self.phaseInputGeneration }
+        phaseInputStatus = "Connecting Phase B: control 3/4, programme 5/6…"
+        Task { [weak self] in
+            guard let self else { return }
+            let granted: Bool
+            if AVCaptureDevice.authorizationStatus(for: .audio) == .authorized { granted = true }
+            else { granted = await AVCaptureDevice.requestAccess(for: .audio) }
+            guard granted else { self.phaseInputStatus = "Microphone permission is required for S9 audio input."; return }
+            self.sessionQueue.async { [self] in
+                guard self.phaseInputLock.withLock({ self.phaseInputGeneration == generation && self.phaseInputUID == uid }) else { return }
+                let old = self.phaseInputLock.withLock { let old = self.phaseInput; self.phaseInput = nil; return old }
+                do {
+                    try old?.stop()
+                    let input = try PhaseS9InputCapture(deviceUID: uid)
+                    try input.start()
+                    let current = self.phaseInputLock.withLock {
+                        guard self.phaseInputGeneration == generation, self.phaseInputUID == uid else { return false }
+                        self.phaseInput = input; self.phaseStopAfterTake = false; return true
+                    }
+                    if !current { try input.stop(); return }
+                    Task { @MainActor in
+                        guard self.phaseInputLock.withLock({ self.phaseInputGeneration == generation }) else { return }
+                        self.phaseInputStatus = "S9 input connected. Check forward direction before recording."
+                    }
+                } catch {
+                    Task { @MainActor in
+                        guard self.phaseInputLock.withLock({ self.phaseInputGeneration == generation }) else { return }
+                        self.phaseInputStatus = error.localizedDescription
+                    }
+                }
+            }
+        }
+    }
+
+    @MainActor
+    func beginPhaseForwardCheck() {
+        guard !isAudioInputSelectionLocked else { return }
+        phaseInputLock.withLock { phaseInput?.beginForwardCheck() }
+        phaseInputStatus = "Move the right platter steadily FORWARD, then press Confirm Forward while it is moving."
+    }
+
+    @MainActor
+    func confirmPhaseForwardCheck() {
+        guard !isAudioInputSelectionLocked else { return }
+        do {
+            try phaseInputLock.withLock {
+                guard let phaseInput else { throw PhaseS9InputCapture.Failure.unavailable("Connect the S9 input first.") }
+                try phaseInput.confirmForwardCheck()
+            }
+            phaseInputStatus = "Forward polarity checked for this connection. Displacement is take-local; revolutions are not calibrated."
+        } catch { phaseInputStatus = error.localizedDescription }
+    }
+
+    private func retirePhaseInputIfIdle() {
+        sessionQueue.async { [self] in
+            let input = phaseInputLock.withLock { () -> PhaseS9InputCapture? in
+                guard phaseStopAfterTake, phaseTakeMediaURL == nil else { return nil }
+                let input = phaseInput; phaseInput = nil; return input
+            }
+            do { try input?.stop() }
+            catch { Task { @MainActor in self.phaseInputStatus = error.localizedDescription } }
+        }
+    }
+
+    private func cancelPhaseTake() {
+        phaseInputLock.withLock {
+            phaseInput?.cancel(); phaseTakeMediaURL = nil; finalizedPhaseEvidence = nil; phaseTakeFinalizing = false
+        }
+    }
+
+    private func finishRoutineCaptureAudio(
+        mediaURL: URL, mediaStart: Double, duration: Double,
+        completion: @escaping (ScratchSamplePlaybackController.RoutineOutputCaptureFinalizeOutcome) -> Void
+    ) {
+        let (isPhaseTake, phase, alreadyFinalizing) = phaseInputLock.withLock {
+            let matches = phaseTakeMediaURL == mediaURL
+            let duplicate = matches && phaseTakeFinalizing
+            if matches { phaseTakeFinalizing = true }
+            return (matches, phaseInput, duplicate)
+        }
+        guard !alreadyFinalizing else { return }
+        if isPhaseTake, phase == nil {
+            completion(.error(PhaseS9InputCapture.Failure.unavailable("The Phase input disappeared before this take could finalize.")))
+            return
+        }
+        guard isPhaseTake, let phase else {
+            scratchPlaybackController.finishRoutineOutputCapture(mediaStartHostTime: mediaStart,
+                mediaDurationSeconds: duration, completion: completion)
+            return
+        }
+        // Match the existing onboard recorder's bounded arrival allowance,
+        // retaining real trailing input before trimming to the movie clock.
+        finalizationQueue.asyncAfter(deadline: .now() + 0.3) { [self] in
+            do {
+                let result = try phase.finish(mediaStart: mediaStart, duration: duration)
+                phaseInputLock.withLock { finalizedPhaseEvidence = result.evidence }
+                completion(.exported(url: result.audioURL, frames: result.frames, sampleRate: 48_000, samples: result.samples))
+            } catch { completion(.error(error)) }
+        }
+    }
+
     private let audioOwnershipLock = NSLock()
     private var audioOwnershipRevision: UInt64 = 0
     private var audioOwnershipModeStorage: ScratchAudioOwnershipMode = .defaultMode
@@ -2981,6 +3285,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         audioOwnershipLock.lock()
         defer { audioOwnershipLock.unlock() }
         return audioOwnershipModeStorage.allowsLocalScratchPlayback
+            && phaseInputLock.withLock { phaseInputUID == nil }
     }
 
     /// When true, a gated `TimecodePlaybackDrive` from `TimecodePlaybackBridge`
@@ -5642,6 +5947,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var activeRoutineDetectedNotationBuilder: RoutineDetectedNotationBuilder?
     private var midiClient: MIDIClientRef = 0
     private var midiInputPort: MIDIPortRef = 0
+    private let midiTimingDiagnostic = MIDITimingDiagnosticRecorder()
+    @Published private(set) var midiTimingDiagnosticStatus = "Timing diagnostic idle"
+    @Published private(set) var midiTimingDiagnosticURL: URL?
+    @Published private(set) var isSavingMIDITimingDiagnostic = false
     private var twelveConnection: RaneTwelveMIDIConnection?
     private var twelveConnectionGeneration: UInt64 = 0
     private var twelvePlatterObservation: MIDIPlatterStepObservation?
@@ -6184,6 +6493,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     func stop() {
+        phaseInputLock.withLock { phaseStopAfterTake = true; phaseInputGeneration = UUID() }
+        retirePhaseInputIfIdle()
         _ = cancelOrdinaryRoutineStart()
         isRunning = false
         playbackPositionPollGeneration &+= 1
@@ -6522,6 +6833,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 #if DEBUG && ENABLE_TIMECODE_LIVE_TAP
         TimecodeCMSampleBufferAdapter.channelPairSelection = .auto
 #endif
+        phaseCapturePath = .dvsThroughDJMS9
+        phaseInputLock.withLock { phaseInputUID = audioDevice.uniqueID; phaseInputGeneration = UUID() }
+        scratchPlaybackController.unload()
         selectedMIDIInputSourceID = midiSource.id
         setSelectedAudioDeviceUniqueID(audioDevice.uniqueID, origin: .explicitUserChoice)
         return true
@@ -6646,7 +6960,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private func releaseRoutinePreparationResources(
         token: RoutineRecordingRequestToken, midiToken: MIDICaptureTakeToken?, outputWasPrepared: Bool
     ) {
-        if outputWasPrepared { scratchPlaybackController.cancelRoutineOutputCapture() }
+        if outputWasPrepared { scratchPlaybackController.cancelRoutineOutputCapture(); cancelPhaseTake() }
         if let midiToken { releaseAbandonedTakeMIDIWindow(token: midiToken) }
         guard let mediaURL = routineRecordingBoundaryLedger.snapshot(for: token)?.mediaURL,
               activeRoutineRecordingSidecar?.mediaFileName == mediaURL.lastPathComponent else { return }
@@ -7062,10 +7376,23 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 // timestamped prefix is removed at finalization, not exported
                 // as part of the take. Count-in provides preparation time.
                 try self.requireCurrentRoutinePreparation(recordingToken)
-                try self.scratchPlaybackController.beginRoutineOutputCapture(
-                    destinationURL: preparedRecording.audioURL,
-                    maximumDurationSeconds: maximumTakeDurationSeconds + 15
-                )
+                if self.phaseInputLock.withLock({ self.phaseInputUID != nil }) {
+                    try self.phaseInputLock.withLock {
+                        guard self.phaseInputUID == selectedAudioID, let input = self.phaseInput else {
+                            throw PhaseS9InputCapture.Failure.unavailable("Reconnect the selected Phase/S9 input before recording.")
+                        }
+                        try input.begin(destination: preparedRecording.audioURL,
+                            sessionID: preparedRecording.sidecar.sessionID, takeID: preparedRecording.sidecar.takeID,
+                            maximumDuration: maximumTakeDurationSeconds + 15)
+                        self.phaseTakeMediaURL = preparedRecording.mediaURL
+                        self.phaseTakeFinalizing = false
+                        self.finalizedPhaseEvidence = nil
+                    }
+                } else {
+                    try self.scratchPlaybackController.beginRoutineOutputCapture(
+                        destinationURL: preparedRecording.audioURL,
+                        maximumDurationSeconds: maximumTakeDurationSeconds + 15)
+                }
                 outputWasPrepared = true
 #if DEBUG
                 try self.testOnly_beforeRoutineMediaArm?(recordingToken)
@@ -7101,6 +7428,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         routineMediaEpochLock.unlock()
         if let cancelledStart {
             scratchPlaybackController.cancelRoutineOutputCapture()
+            cancelPhaseTake()
             releaseAbandonedTakeMIDIWindow(token: cancelledStart.midiTakeToken)
             routineRecordingBoundaryLedger.failStart(token: cancelledStart.recordingToken,
                 description: "Recording stopped before the camera and audio were ready.")
@@ -8725,6 +9053,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // The delegate captured this exact media file's token before any
         // asynchronous audio/mux work. Never resample the current owner here.
         guard let sidecar = activeRoutineRecordingSidecar else {
+            if phaseInputLock.withLock({ phaseTakeMediaURL == outputFileURL }) {
+                cancelPhaseTake(); retirePhaseInputIfIdle()
+            }
             let message = captureErrorDescription != nil
                 ? "Recording ended before it could be saved."
                 : "Finalizing \(outputFileURL.lastPathComponent)..."
@@ -8882,9 +9213,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         #else
         let cameraOrDVS = motionEvents
         #endif
-        // Controller telemetry is authoritative when present; camera/DVS is the
-        // fallback. The two are never merged into one event stream.
-        let resolvedMotionEvents = usesControllerMovement ? controllerEvents : cameraOrDVS
+        let isPhaseTake = phaseInputLock.withLock { phaseTakeMediaURL == outputFileURL }
+        // An explicit Phase take never falls back to image-plane/controller
+        // motion, including its error-finalization path.
+        let resolvedMotionEvents = isPhaseTake ? [] : (usesControllerMovement ? controllerEvents : cameraOrDVS)
         var notationSnapshot = RoutineNotationFusionEngine().snapshot(
             audioSnapshot: audioSnapshot,
             motionEvents: resolvedMotionEvents,
@@ -8893,13 +9225,34 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             labelConfidence: lastScratchDetection?.confidence,
             debugSession: debugSession
         ).withMixerMidiEvents(capturedMidi)
+        // Phase is a separately owned source. It never falls back to camera
+        // or controller events if its signal is rejected.
+        let phaseEvidence = phaseInputLock.withLock { () -> PhaseDVSRecordingEvidence? in
+            guard phaseTakeMediaURL == outputFileURL else { return nil }
+            let result = finalizedPhaseEvidence
+            phaseTakeMediaURL = nil; finalizedPhaseEvidence = nil; phaseTakeFinalizing = false
+            return result
+        }
+        retirePhaseInputIfIdle()
+        if let phaseEvidence, let motion = try? phaseEvidence.motionEvidence() {
+            sidecar.phaseDVSEvidence = phaseEvidence
+            notationSnapshot = CaptureCore.DetectedNotationSnapshot(
+                notationSource: PhaseDVSRecordingEvidence.source,
+                notationConfidence: motion.events.map(\.confidence).min(),
+                detectedLabel: notationSnapshot.detectedLabel, labelSource: notationSnapshot.labelSource,
+                labelConfidence: notationSnapshot.labelConfidence,
+                detectionSources: [PhaseDVSRecordingEvidence.source, "audio", "midi"],
+                recordMovementEvents: motion.events, audioEvents: notationSnapshot.audioEvents,
+                faderEvents: notationSnapshot.faderEvents, mixerMidiEvents: capturedMidi,
+                capturedAt: notationSnapshot.capturedAt)
+        }
         // Controller provenance is preserved through fusion and `snapshot`
         // truthfully labels it (no post-hoc retag). Only the DEBUG DVS path
         // still needs `withTimecodeLiveMovementProvenance` because its events
         // are produced by a separate adapter and the fusion historically
         // relabelled them "video".
         #if DEBUG
-        if !usesControllerMovement, notationRoutingEnabled, lastDrainedTimecodeNotationTimeline != nil {
+        if !isPhaseTake, !usesControllerMovement, notationRoutingEnabled, lastDrainedTimecodeNotationTimeline != nil {
             notationSnapshot = notationSnapshot.withTimecodeLiveMovementProvenance()
         }
         #endif
@@ -8957,6 +9310,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 version: mixerFaders.version, sessionID: sidecar.sessionID, takeID: sidecar.takeID,
                 epoch: mixerFaders.epoch, end: mixerFaders.end, sealed: true,
                 overflowed: mixerFaders.overflowed, observations: mixerFaders.observations)
+            sidecar.mixerFaderEvidence?.gainAuthority = mixerFaders.gainAuthority
         }
 
         #if DEBUG
@@ -13357,9 +13711,65 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             },
             activeCrossfaderState: { [weak self] in self?.activeLiveCrossfaderStateSnapshot() },
             activePlaybackLoopContext: playbackLoopContext,
-            mixerFaderEvidence: { [weak self] in self?.mixerFaderEvidenceSnapshot() }
+            mixerFaderEvidence: { [weak self] in self?.mixerFaderEvidenceSnapshot() },
+            phaseMotion: { [weak self] in
+                guard let self else { return nil }
+                let origin = self.routineMediaStartHostTime
+                return self.phaseInputLock.withLock {
+                    guard self.phaseInputUID != nil else { return nil }
+                    return self.phaseInput?.liveMotion(mediaStart: self.phaseTakeMediaURL != nil && origin > 0 ? origin : nil)
+                        ?? .init(events: [], intervals: [], trajectorySegments: [])
+                }
+            }
         )
     }
+
+    func startMIDITimingDiagnostic() {
+        guard !isSavingMIDITimingDiagnostic else { return }
+        midiCaptureLock.lock()
+        let sourceIsConnected = midiConnectionEndpointIdentityStorage?.sourceID == selectedMIDIInputSourceID
+            && (midiConnectionEndpointIdentityStorage?.endpointRef ?? 0) != 0
+        midiCaptureLock.unlock()
+        guard sourceIsConnected, !selectedMIDIInputSourceID.isEmpty else {
+            midiTimingDiagnosticStatus = "Select and connect a MIDI source first."
+            return
+        }
+        guard midiTimingDiagnostic.start() else { return }
+        midiTimingDiagnosticURL = nil
+        midiTimingDiagnosticStatus = "Recording raw MIDI timing…"
+    }
+
+    func stopMIDITimingDiagnostic() {
+        guard let recording = midiTimingDiagnostic.finish() else { return }
+        isSavingMIDITimingDiagnostic = true
+        midiTimingDiagnosticStatus = "Saving MIDI timing diagnostic…"
+        let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ScratchLab/MIDIDiagnostics", isDirectory: true)
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            do {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let url = directory.appendingPathComponent("MIDI-Timing-\(recording.id.uuidString).json")
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys]
+                encoder.dateEncodingStrategy = .iso8601
+                try encoder.encode(recording).write(to: url, options: .atomic)
+                DispatchQueue.main.async { [weak self] in
+                    self?.midiTimingDiagnosticURL = url
+                    self?.isSavingMIDITimingDiagnostic = false
+                    self?.midiTimingDiagnosticStatus = recording.overflowed
+                        ? "Incomplete diagnostic: \(recording.droppedPackets) packet(s) exceeded the RAM limit."
+                        : "Saved \(recording.packets.count) packets. Reveal the JSON to share it."
+                }
+            } catch {
+                DispatchQueue.main.async { [weak self] in
+                    self?.isSavingMIDITimingDiagnostic = false
+                    self?.midiTimingDiagnosticStatus = "Could not save diagnostic: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    var isMIDITimingDiagnosticRecording: Bool { midiTimingDiagnostic.isRecording }
 
     private func receiveMIDIPacketList(_ packetListPtr: UnsafePointer<MIDIPacketList>) {
         ScratchLabPerformanceSignpost.event(
@@ -13367,6 +13777,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             count: Int(packetListPtr.pointee.numPackets)
         )
         let now = CACurrentMediaTime()
+        // One receipt instant and one diagnostic ID for the entire native
+        // callback. Neither value replaces the live platter's existing `now`.
+        let diagnosticCallback = midiTimingDiagnostic.beginCallback()
+        let callbackReceiptHostTime = diagnosticCallback == nil ? 0 : AudioGetCurrentHostTime()
+        let callbackReceiptNanoseconds = diagnosticCallback == nil ? 0
+            : AudioConvertHostTimeToNanos(callbackReceiptHostTime)
         midiCaptureLock.lock()
         midiObservationIngressCount += 1
         // The WHOLE window identity, taken atomically at ingress. This
@@ -13379,6 +13795,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let ingressTicket = lockedMIDICaptureWindowTicket()
         let deviceName = midiConnectedSourceName
         let deviceIdentifier = midiConnectionEndpointIdentityStorage?.sourceID
+        let inputEndpoint = midiConnectionEndpointIdentityStorage?.endpointRef ?? 0
         let inputConnectionGeneration = midiConnectionGenerationStorage
         midiCaptureLock.unlock()
         defer {
@@ -13421,8 +13838,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let packetFieldOffset = MemoryLayout<MIDIPacketList>.offset(of: \MIDIPacketList.packet)!
         var packetPtr = UnsafeMutableRawPointer(mutating: UnsafeRawPointer(packetListPtr).advanced(by: packetFieldOffset))
             .assumingMemoryBound(to: MIDIPacket.self)
-        for _ in 0..<Int(packetListPtr.pointee.numPackets) {
+        for packetIndex in 0..<Int(packetListPtr.pointee.numPackets) {
             let length = Int(packetPtr.pointee.length)
+            let packetHostTime = packetPtr.pointee.timeStamp
             // Same fix applied to `data`: read exactly `length` bytes from
             // the packet's live storage via its real field offset, rather
             // than `withUnsafeBytes(of: packetPtr.pointee.data)`, which can
@@ -13433,7 +13851,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 start: UnsafeRawPointer(packetPtr).advanced(by: dataOffset),
                 count: length
             )
+            var diagnosticMessages: [MIDITimingDiagnosticRecording.Message] = []
             MIDIChannelMessageParser.parse(rawBytes) { [self] message in
+                if diagnosticCallback != nil {
+                    diagnosticMessages.append(.init(
+                        applicationSequence: 0, messageIndex: diagnosticMessages.count,
+                        status: message.status, data1: message.data1, data2: message.data2
+                    ))
+                }
                 dispatchMIDIChannelVoiceMessage(
                     message,
                     deviceIdentifier: deviceIdentifier,
@@ -13442,6 +13867,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     now: now,
                     inputConnectionGeneration: inputConnectionGeneration
                 )
+            }
+            if let diagnosticCallback {
+                midiTimingDiagnostic.append(.init(
+                    callbackID: diagnosticCallback.id, packetIndex: packetIndex,
+                    endpoint: inputEndpoint,
+                    sourceIdentifier: deviceIdentifier, sourceName: deviceName,
+                    connectionGeneration: inputConnectionGeneration,
+                    packetHostTime: packetHostTime,
+                    packetNanoseconds: MIDITimingDiagnosticClock.nanoseconds(for: packetHostTime),
+                    callbackReceiptHostTime: callbackReceiptHostTime,
+                    callbackReceiptNanoseconds: callbackReceiptNanoseconds,
+                    rawBytes: Array(rawBytes), messages: diagnosticMessages
+                ), in: diagnosticCallback)
             }
             packetPtr = MIDIPacketNext(packetPtr)
         }
@@ -13496,6 +13934,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     func testOnly_receiveMIDIPacketList(_ packetListPtr: UnsafePointer<MIDIPacketList>) {
         receiveMIDIPacketList(packetListPtr)
     }
+
+    func testOnly_startMIDITimingDiagnostic() { _ = midiTimingDiagnostic.start() }
+    func testOnly_finishMIDITimingDiagnostic() -> MIDITimingDiagnosticRecording? {
+        midiTimingDiagnostic.finish()
+    }
+    func testOnly_platterSteps(for channel: Int) -> Int { platterTracker.accumulatedSteps(for: channel) }
 
     /// Test-only seam: `currentMIDIDeviceMapping` is `private(set)` and
     /// normally only changes through the async, disk-backed
@@ -13856,9 +14300,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     func mixerFaderEvidenceSnapshot() -> ScratchMixerFaderEvidence? {
+        let external = phaseInputLock.withLock { phaseInputUID != nil }
         midiCaptureLock.lock()
-        defer { midiCaptureLock.unlock() }
-        return mixerFaderRecorder.snapshot(at: CACurrentMediaTime())
+        var result = mixerFaderRecorder.snapshot(at: CACurrentMediaTime())
+        midiCaptureLock.unlock()
+        if external { result?.gainAuthority = .externalUncalibrated }
+        return result
     }
 
     // MARK: - Live MIDI CC observability (reference-authoring preflight/calibration)
@@ -15448,9 +15895,8 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
             // File-output state may already have reset after didFinish.
             let duration = try? await AVURLAsset(url: outputFileURL).load(.duration)
             let mediaDuration = duration?.seconds ?? .nan
-            scratchPlaybackController.finishRoutineOutputCapture(
-                mediaStartHostTime: mediaStart,
-                mediaDurationSeconds: mediaDuration
+            finishRoutineCaptureAudio(
+                mediaURL: outputFileURL, mediaStart: mediaStart, duration: mediaDuration
             ) { [weak self] outcome in
                 guard let self else { return }
                 let finalError: Error?
@@ -15461,7 +15907,7 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
                         sampleRate: sampleRate
                     )
                     Task { @MainActor in
-                        self.onboardOutputCaptureStatus = "Captured \(frames) onboard AHHH frames for this take."
+                        self.onboardOutputCaptureStatus = "Captured \(frames) scratch-audio frames for this take."
                         let second = await self.secondaryCamera.finish(primaryURL: outputFileURL, audioURL: audioURL,
                             mediaDurationSeconds: mediaDuration)
                         let muxError: Error?

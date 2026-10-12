@@ -113,6 +113,11 @@ enum ReferenceApprovedPackageCoordinator {
             inputs.append(.init(role: .watchMotion, packagePath: "evidence/watch_motion.json", data: motionData))
         }
         let capturedSidecar = try SessionArchiveBuilder().decodeSidecarForAudit(at: sidecarURL)
+        if let phase = capturedSidecar.phaseDVSEvidence {
+            inputs.append(.init(role: .phaseDVSControl,
+                packagePath: "evidence/\(phase.rawControlFileName)",
+                sourceURL: try phase.verifiedControlURL(beside: finalizedMediaURL)))
+        }
         if let secondURL = try capturedSidecar.secondaryCamera?.verifiedURL(beside: finalizedMediaURL) {
             inputs.append(.init(role: .secondaryVideo, packagePath: "video/second_camera.mov", sourceURL: secondURL))
         }

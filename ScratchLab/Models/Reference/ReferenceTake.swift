@@ -1952,7 +1952,7 @@ enum ReferenceTearSegmentationReviewBuilder {
             // range. The take carries no steps-per-revolution reference, so a
             // revolution claim would have to be fabricated here — it is not
             // made. See `CaptureCore.PlatterNotationCoordinates`.
-            coordinates: .normalizedTakeLocal(),
+            coordinates: evidence.phaseDVSEvidence?.coordinates ?? .normalizedTakeLocal(),
             configuration: configuration
         )
     }
@@ -2829,14 +2829,30 @@ extension ReferenceTearCanonicalProjection {
         guard let evidence else { return self }
         let provenance = ScratchNotation.GestureRecord.Evidence(provenance: .measured,
             observation: ScratchNotationEvidence(source: .mixerControls, confidence: 1,
-                reason: "recorded_crossfader_and_channel_software_gate"))
+                reason: evidence.gainAuthority == .externalUncalibrated
+                    ? "recorded_external_fader_positions_gain_unverified" : "recorded_crossfader_and_channel_software_gate"))
+        // Derive the mixer timeline once for this projection. Previously each
+        // gesture revalidated/filtered/sorted the complete observation history.
+        let ranges = records.compactMap { record -> ClosedRange<Double>? in
+            guard record.timingDomain == .seconds,
+                  let first = record.subdivisions.first, let last = record.subdivisions.last,
+                  first.span.startTime.isFinite, last.span.endTime.isFinite,
+                  first.span.startTime < last.span.endTime else { return nil }
+            return first.span.startTime...last.span.endTime
+        }
+        let combined: [ScratchMixerFaderEvidence.Span]
+        if let start = ranges.map(\.lowerBound).min(), let end = ranges.map(\.upperBound).max() {
+            combined = evidence.combinedSpans(in: start...end)
+        } else {
+            combined = []
+        }
         let updated = records.map { record -> ScratchNotation.GestureRecord in
             guard record.timingDomain == .seconds,
                   let first = record.subdivisions.first, let last = record.subdivisions.last,
                   first.span.startTime.isFinite, last.span.endTime.isFinite,
                   first.span.startTime < last.span.endTime else { return record }
             var spans: [ScratchNotation.GestureRecord.FaderSpan] = []
-            for span in evidence.combinedSpans(in: first.span.startTime...last.span.endTime) {
+            for span in ScratchMixerFaderEvidence.Span.clipped(combined, to: first.span.startTime...last.span.endTime) {
                 guard let state = span.state else { continue }
                 if let prior = spans.last, prior.state == state, prior.span.endTime == span.start {
                     spans[spans.count - 1] = .init(id: prior.id,
@@ -3110,6 +3126,18 @@ enum ReferenceTearEvidenceCodec {
         } else if projection.mixerFaders != nil || source.mixerFaderEvidence != nil {
             throw Error.invalidSnapshot("separate mixer lanes require reference tear evidence v2")
         }
+        if let phase = source.phaseDVSEvidence {
+            let motion = try phase.motionEvidence()
+            guard phase.sessionID == source.sessionID, phase.takeID == source.takeID,
+                  phase.deviceUID == source.audioDeviceUniqueID,
+                  review.rawMovementEvents == motion.events,
+                  review.platterEvidenceIntervals == motion.intervals,
+                  review.platterCoordinates == phase.coordinates else {
+                throw Error.identityMismatch("Phase projection differs from its bound control-signal evidence")
+            }
+        } else if review.rawMovementEvents.contains(where: { $0.source == PhaseDVSRecordingEvidence.source }) {
+            throw Error.invalidSnapshot("Phase motion has no bound DVS evidence")
+        }
         guard review.rawMovementEvents == (source.detectedNotation?.recordMovementEvents ?? []) else {
             throw Error.identityMismatch("review raw movement observations differ from the original sidecar")
         }
@@ -3361,7 +3389,11 @@ enum ReferenceTearCanonicalProjectionBuilder {
             return unknownRecord(.releasedPlaybackPresent)
         }
         // Only gesture-relative controller telemetry is in revolutions.
-        guard backingEvents.allSatisfy(CaptureCore.usesGestureRelativeControllerNotation) else {
+        guard backingEvents.allSatisfy({ event in
+            CaptureCore.usesGestureRelativeControllerNotation(event)
+                || (event.source == PhaseDVSRecordingEvidence.source
+                    && review.platterCoordinates == .normalizedTakeLocal(reference: PhaseDVSRecordingEvidence.coordinateReference))
+        }) else {
             return unknownRecord(.unsupportedCoordinateSpace)
         }
         if let confidence = candidate.proposedConfidence,

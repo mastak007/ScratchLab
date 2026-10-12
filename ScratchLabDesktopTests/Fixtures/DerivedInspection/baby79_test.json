@@ -1,0 +1,152 @@
+{
+  "schemaVersion": "scratchlab_derived_reference_inspection_v1",
+  "sourceType": "videoAudioDerived",
+  "hardwareGroundTruth": false,
+  "canonicalReference": false,
+  "source": {
+    "performanceID": "qbert_makemkv_dvd/Baby_79bpm",
+    "sourceCollection": "qbert_makemkv_dvd",
+    "sourceMKV": "Baby_79bpm/title_t02.mkv",
+    "sourceFolder": "Baby_79bpm",
+    "cameraAngle": "angle_3",
+    "videoFile": "angle_3_video.mkv",
+    "archive": "baby2.zip",
+    "datasetItemID": "79408a15b57e5e46ac7e683261669abb",
+    "ingestSourceType": "makemkv_dvd_rip",
+    "labelSource": "folder_name_makemkv_ingest",
+    "performer": "Qbert",
+    "scratchType": "baby",
+    "bpm": 79,
+    "bpmSource": "folder_name",
+    "trainingUse": "primary_training"
+  },
+  "timebase": {
+    "analysisFramesPerSecond": 59.94005994005994,
+    "sourceStartSeconds": 18,
+    "analysisDurationSeconds": 6,
+    "referenceMetadataFile": "reference.json"
+  },
+  "trajectoryProvenance": {
+    "sourceType": "videoDerived",
+    "trajectoryFile": "trajectory.csv",
+    "referenceMetadataFile": "reference.json",
+    "method": "scratchlab_platter_poc.py frozen Baby marker tracker",
+    "angleConvention": "smoothed_angle_deg; counterclockwise positive",
+    "velocityConvention": "signed_velocity_deg_s_forward_positive"
+  },
+  "samples": [
+    {
+      "frame": 0,
+      "timestampSeconds": 18,
+      "angleDegrees": 105.756596,
+      "angularVelocityDegreesPerSecond": -44.84619,
+      "direction": "REVERSE",
+      "visualConfidence": 0.997532,
+      "interpolated": false
+    },
+    {
+      "frame": 7,
+      "timestampSeconds": 18.116783,
+      "angleDegrees": 113.191937,
+      "angularVelocityDegreesPerSecond": -21.623833,
+      "direction": "STILL",
+      "visualConfidence": 0.985107,
+      "interpolated": false
+    },
+    {
+      "frame": 26,
+      "timestampSeconds": 18.433767,
+      "angleDegrees": 26.819388,
+      "angularVelocityDegreesPerSecond": -28.255763,
+      "direction": "STILL",
+      "visualConfidence": 0.898272,
+      "interpolated": false
+    }
+  ],
+  "turnarounds": [
+    {
+      "frame": 7,
+      "timestampSeconds": 18.116783333333334,
+      "directionChange": "REVERSE_TO_FORWARD",
+      "visualConfidence": 0.985107,
+      "audioAvailability": "available",
+      "audioSupport": {
+        "measuredLagFields": -1,
+        "measuredLagMilliseconds": -16.683333333333334,
+        "troughRMS": 0.0007234661398054417,
+        "localBaselineRMS": 0.047324039319712026,
+        "troughRatio": 0.01528749764824268
+      }
+    }
+  ],
+  "audio": {
+    "sourceFile": "angle_3_noBeat.wav",
+    "evidenceFile": "audio_evidence_poc_v2/audio_turnaround_evidence.json",
+    "role": "noBeat",
+    "semantics": "beat_removed_program_audio_may_include_speech",
+    "modifiesVisionTrajectory": false,
+    "activityGateBasis": "frozen_vision_direction_plus_turnaround_padding",
+    "activityPadFields": 5,
+    "frames": [
+      {
+        "frame": 0,
+        "visionActive": true,
+        "availability": "available",
+        "rms": 0.002002246,
+        "spectralFlux": 0,
+        "motionNorm": 0.16403739
+      },
+      {
+        "frame": 7,
+        "visionActive": true,
+        "availability": "available",
+        "rms": 0.000969304,
+        "spectralFlux": 0.007256825,
+        "motionNorm": 0
+      },
+      {
+        "frame": 26,
+        "visionActive": true,
+        "availability": "available",
+        "rms": 0.002156509,
+        "spectralFlux": 0.067505574,
+        "motionNorm": 0.182451195
+      }
+    ]
+  },
+  "avLag": [
+    {
+      "evidenceFile": "av_lag_poc/av_lag_report.json",
+      "feature": "audioMotionNorm",
+      "subset": "visionGated",
+      "lagFields": 1,
+      "pairs": 359,
+      "pearson": 0.7723902981529327,
+      "spearman": 0.8484608167279232,
+      "reportedAnalysisFPS": 59.94125756758216,
+      "modifiesVisionTrajectory": false
+    },
+    {
+      "evidenceFile": "av_lag_poc/av_lag_report.json",
+      "feature": "audioSpectralFlux",
+      "subset": "visionGated",
+      "lagFields": 1,
+      "pairs": 359,
+      "pearson": 0.7800642216836904,
+      "spearman": 0.7793560635533215,
+      "reportedAnalysisFPS": 59.94125756758216,
+      "modifiesVisionTrajectory": false
+    }
+  ],
+  "review": {
+    "state": "needsReview",
+    "reviewer": null,
+    "reviewedAt": null,
+    "notes": "Small schema fixture; raw validation remains unadjudicated. Not an independent session.",
+    "evidenceFiles": [
+      "validation_blind.json",
+      "validation_report.json",
+      "validation.csv"
+    ]
+  }
+}

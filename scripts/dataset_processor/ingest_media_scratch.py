@@ -781,6 +781,10 @@ class MediaScratchIngester:
 
 
 def main() -> int:
+    # Serialization of existing evidence only; never enters media extraction.
+    if len(sys.argv) > 1 and sys.argv[1] == "derived-inspection":
+        from derived_reference_inspection import main as inspection_main
+        return inspection_main(sys.argv[2:])
     try:
         args = parse_args()
         return MediaScratchIngester(args).run()

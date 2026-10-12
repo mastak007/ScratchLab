@@ -1,3 +1,18 @@
+<!-- all-capture-checkpoint-20261012 begin -->
+## 12 October 2026 — all current Capture changes authorized for checkpoint
+
+The user answered the outstanding scope question with "All current Capture changes" after narrow notation commit 9e590cee91daa4911613298b2e124c9f5dbb366c was pushed. This explicitly expands the authorized checkpoint to the remaining Capture performance, focused recording workspace, stable warning layout, camera lifecycle, Phase/S9 capture and evidence/export integration, offline derived-inspection tooling and regression fixtures, plus their accumulated workflow records. The earlier narrow commit is retained; no source implementation is changed by this checkpoint operation.
+
+Current 753-path source inventory matches the just-packaged full-app snapshot byte-for-byte, allowing only the four finalized workflow records. The historical unreviewed ScratchLab/Resources/CoachDemoMotion/cxl_baby_target.json remains preserved and untracked: it predates these Capture tasks and is outside the Capture checkpoint. Captured media, ignored build products, preferences and existing apps are not staged.
+
+Verification receipts are reused without another build: the preceding complete-source normalization gate passed scripts/build.sh all (9,300 XCTest passes, 124 skips, zero failures; 1,064 named Swift Testing passes; 123 Python passes; iOS, macOS Release/CXLRelease and Watch PASS). Its only subsequent code delta is the four notation-framing source/test files. That delta passed its separate narrow full gate and the combined current app passed 480 focused XCTest executions with four skips, all 36 required names twice, followed by a universal Developer ID CXL build and verified ZIP/signature roundtrip. This is a receipt-bound checkpoint of the unchanged combined source; it does not claim a new full all-platform gate for the combined tree. No build remains active.
+
+The existing SL-Capture-Notation-Framing-Fix-2026-10-12.zip already contains this complete app state; no replacement build or installation is needed for this Git scope change. Intel smoothness, operator visual acceptance and new physical calibration remain NOT RUN. The app is signed and not notarized; current installed apps are unchanged.
+
+Evidence: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-12/capture-checkpoint-all. See source-audit/checkpoint receipt and final GIT-RECEIPT.json for the exact staged paths, code-byte match, final commit and remote verification. Commit and push are explicitly authorized; their actual completion is recorded externally after Git succeeds. The earlier 753-path source archive remains the local recovery backup, and this checkpoint retains all prior workflow entries.
+
+<!-- all-capture-checkpoint-20261012 end -->
+
 <!-- notation-framing-20261012 begin -->
 ## 12 October 2026 — notation framing fixed; verified checkpoint
 
@@ -16,6 +31,253 @@ Delivery: SL-Capture-Notation-Framing-Fix-2026-10-12.zip. Developer ID signed fo
 Durable checkpoint: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-12/notation-framing. The verified source archive preserves all 753 current source paths including unrelated dirty work. Only six task code/test files and these four task-specific workflow entries belong in the Git checkpoint. User explicitly authorized commit and push; the actual commit, branch, staged-byte comparison and remote verification are recorded separately in GIT-RECEIPT.json after Git completes. Do not infer remote completion from this pre-commit source record.
 
 <!-- notation-framing-20261012 end -->
+
+## 12 October 2026 — controller normalization SOFTWARE VERIFIED; signed candidate ready
+
+The supplied take 249EA41D exposed camera-coordinate floors rejecting already-decoded controller movement after whole-take normalization. Minimal source-aware normalization retains decoder-accepted movement; decoder noise/gap/source thresholds, audio, calibration and saved evidence remain unchanged. Exact original raw replay retains 65 runs instead of 42, recovering 7.113631 media-bounded seconds. All 42 original outputs reproduce field-for-field within 1e-12 tolerance; decoded events/evidence intervals are equal before and after. This is saved MIDI interpretation, not physical calibration or technique acceptance.
+
+Required scripts/build.sh all PASS: 9,300 XCTest passed, 124 existing skips, zero failures; 1,064 named Swift Testing and 123 Python passed. All three new regressions passed twice. iOS, macOS Release, macOS CXLRelease and Watch builds PASS; all gate children reaped with no survivors. Developer ID signing overlay changes only signing settings; universal executable bytes match the full-gate build outside signatures and signing-size fields. No embedded Store provisioning profile remains. Staging, identity/permissions/entitlements, strict signature and ZIP roundtrip PASS.
+
+Delivery: /Users/karlwatson/Downloads/SL-Capture-Controller-Notation-Fix-2026-10-12.zip
+ZIP SHA-256: f82ba7a124bb7a42c6602f0c67212c0d338ee8734b542090d6607fec8059ae2d
+Executable SHA-256: 06065a82f8ce172234a456b5aad97a84e11bed64e57f989b3cd703f520e3cf1f
+
+Version 1.0.1 (24), universal Intel/Apple silicon, macOS 15+, Developer ID signed and NOT notarized. Previous apps and original take unchanged. Not installed or launched. New finalizations use the correction; old saved notation is preserved. No new physical/Intel responsiveness acceptance, commit or push. The interrupted focused run is retained as INTERRUPTED, not PASS; the completed full gate covers its tests.
+
+Changed: ScratchLabDesktop/Services/MacCaptureEngine.swift, ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift, TASKS.md, DEV_LOG.md, AI_HANDOFF.md, AI_HANDOFF/next_prompt.md. Durable evidence: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-12/controller-normalization/RESULT.md. The frozen verified source archive records build inputs; final workflow records advance afterward. All other pre-existing tracked/untracked source bytes preserved. No gate remains active; do not rerun matching checks without a new change or concern. Next operator use can use this dated candidate; retain the previous app for rollback.
+
+## 12 October 2026 — verification continuation and signing recipe
+
+Full gate remains active under PID44143; do not duplicate. Native log has passed the new Rane and legacy-presentation regressions in the first configuration and is continuing the existing export/evidence suite, with no failure observed at this checkpoint. Original replay cross-check matches every field of the 42 saved movements (1e-12 numeric tolerance).
+
+After full PASS use the optimized, prepared local-release/run_incremental_release.py (NOT run_acceptance_build.py): it copies and hash-verifies the Store app, reuses the exact full-gate CXL compiler outputs under the existing signing-only overlay, then runs local-release/compare_payload.py. That comparison now requires strict equality outside signatures and signature-related size fields; no debug-path/UUID exception is accepted. package.py reads this strict receipt. This saves a redundant cold compilation without dropping any test or payload check. Then durable evidence/report and workflow completion. No signing build/package/install has run yet.
+
+## 12 October 2026 — controller normalization verification CONTINUING
+
+Read this checkpoint before older ACTIVE entries. Turn interruption killed the focused supervisor; orphan xcodebuild PID41369 was identity-checked and retired, with no owned survivors. Partial results retained under full-gate/focused; NOT a completed focused gate. All three new regression tests each passed once before interruption; no XCTest assertion failure was observed. Independent read-only review found a stale multi-revolution test expectation, now corrected to assert current fusion retains both runs while explicitly preserving an empty legacy saved-snapshot presentation scenario.
+
+New frozen source (752 files) rehashed/archived. Warm-refresh and native repository probe PASS, children reaped/no survivors. The required full scripts/build.sh all is ACTIVE under detached bounded supervisor PID44143 (survives turn interruption), /private/tmp/sl-controller-normalization-20261012/run_full.py. Read full-driver-process.json and full-driver.log before starting anything. Native/all-platform receipts are authoritative; do not duplicate/restart an active gate. On unexpected assertion/build failure stop downstream; signing/package not started. After PASS: summarize_full.py, local-release/run_acceptance_build.py, local-release/compare_payload.py then compare_functional_payload.py, and package.py. Intended ZIP Downloads/SL-Capture-Controller-Notation-Fix-2026-10-12.zip. Original Stable Status candidate retained. No install/commit/push.
+
+## 12 October 2026 — controller normalization repair ACTIVE
+
+User confirmed AHHH works after clearing disconnected Twelve selection, then supplied no-beat take 249EA41D and authorized proceeding with movement-rejection diagnosis/repair. Exact raw sidecar hash verified; 17,801 raw packets include finalization tail, versus 16,412 clipped exported MIDI events. Production decoder accepts 65 runs. Extracted unchanged Swift decoder + normalizer reproduced 65 -> 42. Of 23 downstream rejections, 18 fail camera speed threshold and 5 camera displacement threshold after whole-take span normalization. This is distinct from raw decoder packet gaps/noise rejection.
+
+Minimal MacCaptureEngine.RoutineNotationEventNormalizer change: controller-source events bypass camera-coordinate floors, retain timing/positions/confidence/source, keep normalized speed representation and use plain push/pull kinds rather than camera speed classes. Finite/nonzero movement checks remain. Decoder/modulus/minimum duration/steps/gap checks unchanged. Actual raw replay after correction retains 65/65; decoded events and decoder evidence intervals compare exactly equal before/after. 7.113631 seconds of previously normalization-rejected travel lie within the 23.169410-second media span. No hardware calibration or physical travel truth claimed; raw coordinates remain provisional. Original archive/preferences/app preserved; existing persisted notation is not rewritten.
+
+Changed source: MacCaptureEngine.swift; regression coverage and relevant optional archived-stream expectations in CaptureReliabilityPhase1Tests.swift. Regressions cover small and slow decoder-accepted travel despite later large movement, repeated normalization, fusion without audio, Codable/export, unchanged camera rejection, and existing noise/gap/source tests. Required native warm build/focused checks ACTIVE exec4724 via /private/tmp/sl-controller-normalization-20261012/run_focused.py, log focused-driver.log. No competing gate found. Then run_full.py performs the required scripts/build.sh all on frozen snapshot; stop on unexpected gate failure. Signed package only after full PASS. No install/commit/push. Evidence root /private/tmp/sl-controller-normalization-20261012. Baseline 752-file hashes/dirty patch preserved before edits.
+
+## 12 October 2026 — M4 disconnected Twelve playback blocker identified
+
+User confirms no AHHH regardless of Rane/Mac output. Exact running Stable Status app PID37773 was observed. CUA exact-path native inspection twice failed with Sky pipe closed; no UI state was fabricated or alternate UI automation used. Bounded read-only CoreMIDI listener connected to the selected Rane ONE MKII, captured 49 matching Hot Cue1 presses (95 14 7F) and releases, then disconnected/disposed cleanly. This proves CoreMIDI receives the expected pad address, not that the app completes sample loading.
+
+M4 sandbox preferences still select separate Twelve source midi_-479473064 while CoreMIDI enumerates only main Rane ONE MKII midi_-777341868. Current production provider explicitly switches away from the ONE when twelveSelectedSourceID is nonempty; unavailable Twelve yields no correlated observation and the coalescing tick publishes idle. This is a confirmed configuration blocker for platter-driven playback, not an M4/Intel architecture difference. The supplied Intel take used separatePlatterSource=false.
+
+Asked user to select Hardware inputs -> Separate Twelve platter -> None — use main MIDI source, then Hot Cue1 and move right platter. Preference remained stale at last read; audible/sample-view recovery is NOT YET CONFIRMED. Do not silently clear selection/fallback because the source identity is intentional capture configuration. No source, mapping or preference edits, app restart, recording, build, or install performed. Only diagnostic files and handoff notes changed. Evidence: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-12/m4-hotcue/facts.json and pad-observation.log.
+
+## 12 October 2026 — M4 physical hot-cue diagnosis pending live symptom
+
+User shifted from prior audio/Record questions to physical Rane pad giving no AHHH on M4. Read-only diagnosis: latest dated Stable Status app launch and exact executable verified, assets present; current Rane MIDI endpoint matches saved selection and pad1 mapping matches Intel sample. M4 saved output=Rane; supplied Intel take output=MacBook Pro Speakers. App closed during inspection, no launch/settings/source change. Asked whether AHHH/waveform loads but stays silent or does not load; reply pending. Do not claim old build, chip-specific defect, missing mapping or successful fix. See /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-12/m4-hotcue/RESULT.md. No build/test gate started.
+
+## 12 October 2026 — audio warning row SOFTWARE/PACKAGE PASS
+
+Root cause confirmed from retained original video frames and actual native reproduction: conditional stale-output warning appeared in two audio meters, changing the form document height by 38 points even though scroll origin stayed unchanged. This affected Setup and content below it, including Review. The previous offset-only test missed it.
+
+Minimal production change: ReferenceAuthoringView.captureAudioMeter uses a permanent two-line status row. Orange unavailable and neutral receiving-samples text update in place; no change to freshness, capture evidence, data, validation or export. Added actual full-form test in LivePerformedNotationTrackerTests.swift, alternating real fresh/stale snapshots through existing no-hardware startup hook. Before: height drift 38, offset drift 0; after: both 0 at Setup/bottom in both configurations. Focused 82 tests passed, no skips/failures.
+
+Required scripts/build.sh all PASS: 9296 XCTest passed, 124 existing skips, zero failures; 1064 Swift Testing, 123 Python; iOS, macOS Release/CXLRelease, Watch. Signed Developer ID build, settings parity, strict runtime/resource equivalence on both architectures, signature and ZIP roundtrip PASS. All successful children reaped/no survivors. Negative reproduction retained as expected failure evidence. No previous/failing run misreported as a pass.
+
+Delivered /Users/karlwatson/Downloads/SL-Capture-Stable-Status-2026-10-12.zip
+ZIP SHA-256: 7c7bbd74f5933d3a5e1540a257d90fdfa6b51d099d17f93865cc178adc6cfa36
+Executable SHA-256: 55fe539640ba55b20c03b32b6b68b1dc3195677223c4c1f069c909ef4db17889
+Version 1.0.1 (24), macOS 15+, Intel/Apple silicon. Developer ID signed, NOT notarized. Existing Downloads app and archived original reference unchanged; prior Focused Capture ZIP retained. No production installation/launch, commit, push or upload.
+
+New Intel visual/performance and physical acceptance NOT RUN. Operator check is Setup and existing review while meter status changes; no repeat take is needed just for this layout fix. Do not broaden this proven warning-induced layout repair into a claim that all lag is fixed.
+
+Source archive: 752 frozen files, matching hashes. Task-only patch plus later workflow-only patch retained. All 746 non-task candidate files unchanged. Durable report: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-12/stable-status/RESULT.md.
+
+Active delivery continuation: exec66237 runs /private/tmp/sl-capture-warning-layout-20261012/finish_delivery.py, waiting for existing full gate exec44239. It sequentially summarizes, builds signed local release, checks payload equivalence, packages, finalizes records and archives evidence. Check delivery-driver.log; do not duplicate any of those stages. User asks faster processing: minimize idle time, preserve existing required gate and exact tested candidate.
+
+## 12 October 2026 — warning-row repair focused PASS; full gate ACTIVE
+
+Exact source culprit: captureAudioMeter conditionally inserted the orange Waiting for ScratchLab output warning. It occurs twice above Review. Original full-resolution saved video frames show the missing-output row. Reproduced against unchanged production source: 38-point document-height change, zero clip offset movement, both Setup/bottom positions in both native configurations. Previous offset-only synthetic test missed this.
+
+Minimal correction in ReferenceAuthoringView.swift: permanent two-line status text, orange unavailable/neutral receiving samples; same live freshness source, no new timing or suppression. Added actual full-form regression in LivePerformedNotationTrackerTests.swift using fake startup hook and real meter freshness, no camera/recording. Fixed result: document-height drift 0 and scroll drift 0 in both positions/configurations. Focused 82 tests PASS, no failures/skips; child reaped/no survivors. Negative reproduction and source frozen/archive/patch retained. All 752 frozen file hashes verified.
+
+Required scripts/build.sh all ACTIVE exec44239 via /private/tmp/sl-capture-warning-layout-20261012/run_full.py; full-driver.log and full-gate/full-gate.log. Do not duplicate, modify verifier or rerun previous tests. No other active native gate found at entry. On unexpected gate failure, stop downstream. After PASS summarize_full.py, local-release/run_acceptance_build.py, compare_payload.py, compare_functional_payload.py, package.py. Intended delivery Downloads/SL-Capture-Stable-Status-2026-10-12.zip. Prior Focused Capture package retained. Signing/compiler comparison and delivery still pending. New Intel visual/performance acceptance NOT RUN. No need for another take just to verify layout; inspect Setup and existing review.
+
+## 12 October 2026 — audio warning row jump repair ACTIVE
+
+User clarifies orange warning rows shift Setup and the page after recording; directed us back to original video. Re-inspected retained contact.jpg at full resolution: the orange Waiting for ScratchLab output line appears beneath the meter, inserting/removing layout space. Original video path in Downloads is now absent; retained frames are used. captureAudioMeter has conditional level == nil Text and is used twice in the long form, which remains above review. Previous synthetic scroll test only changed hand/meter publications and never crossed real output freshness, so it did not cover this transition.
+
+Canonical branch/HEAD unchanged, dirty work preserved and before hashes/patch saved in /private/tmp/sl-capture-warning-layout-20261012. Added native actual-form regression toggling real meter freshness, measuring document height AND scroll origin near Setup and at bottom. Reproduction against unchanged production source ACTIVE exec39541 via run_ui.py (warm build then focused two configurations), output reproduction-driver.log. No other native build active. Stop on unexpected failure; intentional negative layout assertions are reproduction evidence, not a gate pass.
+
+Planned minimal correction: permanent two-line audio-meter status row changes text in place, preserving orange unavailable indication and actual freshness semantics; shared meter fixes both locations. Do not alter capture pipeline, export, live evidence or broaden other warning behavior without evidence. Then focused actual-form regression plus existing focus/refresh checks, scripts/build.sh all, signed package/parity/ZIP verification and updated delivery. Previous Focused Capture ZIP remains unchanged. New implementation/Intel visual acceptance NOT RUN.
+
+## 12 October 2026 — Focused Capture SOFTWARE/PACKAGE PASS; Intel acceptance NOT RUN
+
+Delivered /Users/karlwatson/Downloads/SL-Capture-Focused-Capture-2026-10-12.zip
+ZIP SHA-256: 2192928bb4108b49ba2cc21965bb377adb2b52de18b4ca912fd255bee43c34c5
+Executable SHA-256: 54b48919076037413e2ebb461961bc4b0168d7fb402c58b1435b4f110564b67f
+
+Record opens a dedicated fixed Capture workspace in the existing window: camera/sample/notation, persistent Stop, guarded Back and automatic Review after successful finalization. Open Capture View permits preview before recording. One model/recorder/tracker lifecycle; route-owned camera-guide cleanup; secondary preview reserves status height. App service lifetime no longer forwards live publications into the window root; preflight uses eager stable rows. Capture evidence, sampling, metadata, calibration, persistence and export use existing paths.
+
+Final software PASS: 9,294 XCTest passed, 124 existing skips, zero failures; 1,064 Swift Testing, 123 Python; iOS, macOS Release/CXLRelease and Watch builds. Original full runner hit ENOSPC during macOS Release; remaining identical platform legs resumed with -jobs 1 and passed, retaining original failed evidence and successful native/iOS receipts. All successful child receipts reaped/no survivors. Focused 80 tests PASS; hosted 900x700 and 1180x820 images inspected. Old root 30 rebuilds -> new root 0 while live leaf received 30 updates; setup form scroll drift zero over 60 synthetic updates. These are Apple-silicon software checks, not Intel CPU measurements.
+
+Developer ID build/signing-settings parity, strict Store/local runtime/resource comparison on both architectures, signature and ZIP roundtrip PASS. Version 1.0.1 (24), Intel/Apple silicon, macOS 15+, NOT notarized. Archived original baseline and current Downloads/SL Capture.app unchanged. No production install/launch, commit, push or upload. Frozen 752-file source archive and task-only patch preserved; final workflow updates are separately recorded. All 742 unrelated candidate files unchanged.
+
+Prior two candidates Intel responsiveness FAIL. New candidate Intel CPU/UI and physical capture acceptance NOT RUN. Next is one combined same-rig check: focused view/Record stability, Stop -> Review, play/save/reopen/export. Keep Codex/build work on the development Mac during comparison. Do not claim all lag fixed or ask to repeat already accepted unrelated evidence.
+
+Durable report and receipts: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-12/focused-capture/RESULT.md
+
+Additional authorized development-Mac cleanup COMPLETE: 458 unused compiler-cache directories, about 23.56 GB net freed during cleanup (12.97 -> 36.53 GB available). 744,023 surrounding non-cache files unchanged. Media, projects, app packages, test/evidence records and simulator data preserved. See /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-12/storage-cleanup/RESULT.md. This was the connected Apple-silicon Mac, not the Intel Mac.
+
+## 12 October 2026 — final software/platform PASS; signed build ACTIVE
+
+All final frozen-candidate required checks passed: 9,294 XCTest passed, 124 existing skips, zero failures; 1,064 Swift Testing (532 each configuration), 123 Python; iOS, macOS Release, macOS CXLRelease and Watch builds PASS. Native/iOS original successful receipts retained; remaining three identical platform legs resumed successfully after correcting ENOSPC with -jobs 1 only. Original interrupted full invocation is not reported as exit 0; failure record and continuation are retained. All successful child receipts reaped/no survivors. Summary: /private/tmp/sl-capture-focus-20261012/full-verification-summary.json.
+
+Final Developer ID build ACTIVE exec47790, local-release/driver.log. Do not duplicate or rerun tests. After PASS: compare_payload.py then compare_functional_payload.py, guarded package.py, final docs/preservation audit and archive_evidence.py. Current Downloads app preserved against recorded full manifest. Archived original baseline signature/hash/duplicate-manifest verified. Delivery ZIP not yet produced. Intel UI/CPU and physical acceptance NOT RUN.
+
+Authorized development-Mac cleanup COMPLETE: about 23.56 GB net freed (12.97 -> 36.53 GB available), 458 inactive compiler-cache directories removed, 744,023 surrounding non-cache files unchanged. Report /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-12/storage-cleanup/RESULT.md. All media/projects/packages/evidence/simulator data preserved.
+
+## 12 October 2026 — disk-full recovery and authorized storage cleanup
+
+Final candidate native/Python/iOS gates PASS: 9,294 XCTest passed, 124 skips, no failures; 1,064 Swift Testing; 123 Python. Original full runner exec36610 failed ENOSPC during macOS Release, with no code failure diagnosed; original failed output retained. Remaining exact platform legs resume in exec31395 via /private/tmp/sl-capture-focus-20261012/resume_platforms.py using -jobs 1 only. Do not duplicate builds or rerun passed tests. Code hashes remain frozen; Intel/physical acceptance NOT RUN.
+
+User authorized cleanup of the connected Apple-silicon development Mac. Audit and remove verified disposable caches; protect all projects, recordings, DJ media, app packages and evidence. Storage inventory/receipts: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-12/storage-cleanup. Prior task-owned native intermediates and leased test temporaries reclaimed with receipts. No broad user-data deletion.
+
+Packaging reference Downloads/SL Capture Pro DJ has disappeared externally. Archived 6 October baseline at ScratchLab-Local-Evidence/2026-10-05/phase-s9-implementation/package/SL Capture Pro DJ/SL Capture.app matches original binary e67379a8c526da451e96ee012c73e97f4557fbd7b11db3ac8a1de89240011ed1; verify signature/manifest before use. Preserve current Downloads/SL Capture.app (binary f8bf26bf91e9ff32c6c2e685a0a14d10e1620c1cc8e3b28a46fd7217d4440d70). Update package/summarizer for resumed legs and archive baseline before running.
+
+### Final candidate gate restarted after secondary-camera budget correction
+
+Focused gate remains PASS: 80 XCTest executions, no skips/failures, both configurations. Secondary camera now reserves 36 points for spacing and its two-line status inside the board height. Prior full exec39405 was deliberately interrupted for this source correction, not a test failure; receipt reaped child/no survivors in interrupted-full-1. Final full gate ACTIVE exec36610 under /private/tmp/sl-capture-focus-20261012. Do not duplicate or mutate verifier. Earlier driver/session references below are historical. Frozen source archive and task-only patch regenerated against this candidate. Full release/package and Intel/physical acceptance still pending.
+
+## 12 October 2026 — Focused Capture final verification ACTIVE
+
+Current user task: add a distraction-free camera/sample/notation workspace on Record, with permission to choose a better alternative to a second window. Implemented fixed workspace in the existing window, keeping one recording/model/tracker lifecycle; Stop stays visible, Back is disabled during active capture/finalization, successful finalization returns to Review. Open Capture View permits framing before Record. Inactive-camera message overlays its fixed region. Existing raw capture, metadata, calibration, persistence/export paths retained. Also includes app service-owner observation isolation and eager preflight grid from the third lag investigation.
+
+Focused native UI/camera gate PASS in both configurations, including actual hosted windows at 900x700 and 1180x820. Screenshots inspected: all regions/controls fit, only bounded evidence/message scrolling. Synthetic 30-update app-owner check: old root 30 rebuilds, new owner 0, live leaf 30. Actual setup form stayed at the same scroll origin across 60 synthetic updates. These are Apple silicon software checks, not Intel or physical acceptance.
+
+Full scripts/build.sh all ACTIVE in exec session 39405; /private/tmp/sl-capture-focus-20261012/run_full.py, full-driver.log, full-gate/full-gate.log. Frozen verification snapshot matches all 752 candidate hashes. Do not edit it or duplicate this run. Warm/focused and repository-access probe PASS. Earlier UI Fix 3 full invocation was deliberately cancelled for this changed scope; no full PASS claimed. Two compiler iterations and first focused source-contract failures corrected; their receipts/results retained, children reaped/no survivors.
+
+After full PASS: summarize_full.py must validate actual named regression counts; run local-release/run_acceptance_build.py, compare_payload.py and compare_functional_payload.py, then guarded package.py. Intended ZIP Downloads/SL-Capture-Focused-Capture-2026-10-12.zip. Keep original 6 October installation and prior ZIPs. New candidate Intel responsiveness and physical capture acceptance NOT RUN; first two candidates responsiveness FAIL. No production install/launch, commit, push or external upload.
+
+## 11 October 2026 — Intel CPU repair SOFTWARE/PACKAGE VERIFIED; Intel acceptance pending
+
+Root cause observed in the supplied matching x86_64 sample: SwiftUI repeatedly prepared live canonical motion/mixer data on the main thread; per-gesture mixer scans, per-packet identity string allocation and duplicate onset review detection added work. Patched five implementation files (CaptureCore.swift, ReferenceTake.swift, NotationCandidateDiagnostics.swift, LivePerformedNotationTracker.swift, ReferenceAuthoringView.swift) plus LivePerformedNotationTrackerTests.swift and MIDIUserMixerGainTests.swift. Live frames are prepared on the serial poll queue and published atomically with at most one pending UI update. Mixer spans are derived once and clipped per gesture. Raw capture cadence/evidence, coordinates, gaps, decoder thresholds, schemas and saved/export paths are preserved.
+
+Full required scripts/build.sh all PASS: 9,276 XCTest passed, 124 existing skips, zero failures; 1,064 Swift Testing and 123 Python passed. iOS/full macOS Release/CXLRelease/Watch PASS. Six new regressions each passed twice. Focused gate: 420 passed, two optional-fixture skips. Fair synthetic Debug span benchmark (16,000 observations / 100 records): 1.0743s -> 0.01617s and 1.0888s -> 0.01614s, exact output equality. These are Apple silicon calculation timings, not Intel app CPU results.
+
+Existing Developer ID overlay local build/settings parity, strict Store/local runtime/data equivalence on both architectures, identity/permissions/entitlements, codesign and ZIP roundtrip all PASS. All build/test supervisors reaped children and reported no survivors. Exact 752-file verified candidate archived and hash-checked. Task-only patch and preservation audit retained; all unrelated tracked bytes and preexisting untracked candidate files preserved. The current canonical candidate includes existing offline inspection and optional MIDI diagnostic work; that delta from the older packaged source is separately recorded, not attributed to this repair.
+
+Delivery: /Users/karlwatson/Downloads/SL-Capture-Intel-CPU-Fix-2026-10-11.zip
+ZIP SHA-256: 9a01d6ae3e27780e29ba994e8c07d0a09c0928116e75e6d33b1a43ac257814d1
+Executable SHA-256: 79dbf74d81740a81cc89a410a0069c0ae5364c19605787d0534f2ca36086e359
+Version stays 1.0.1 (24), macOS 15+, Intel/Apple silicon, Developer ID signed, NOT notarized. Previous installed app and saved data unchanged. No production install/launch, commit, push or external upload. Durable report/receipts/source archive: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-11/intel-cpu/RESULT.md.
+
+Next: transfer this package to the 2020 Intel Mac and perform the included single combined CPU/responsiveness and record/play/save/reopen/export comparison under the original camera/controller/workflow/duration. Keep Codex/build work on this Apple silicon Mac during that comparison. Intel performance and physical capture acceptance remain NOT RUN. If lag persists, retain a new Activity Monitor sample and this build receipt; do not claim a specific whole-app CPU reduction from the synthetic benchmark. Do not repeat passed software gates without changed inputs or a newly identified concern.
+
+### Full software verification PASS; local package building — 11 October 2026
+
+Full exec session 88263 completed exit 0. Required scripts/build.sh all PASS: 9,276 XCTest passed, 124 existing skips, zero failures; 1,064 Swift Testing and 123 Python passed. iOS/full macOS Release/CXLRelease/Watch builds PASS, all children reaped and no survivors. Six new regression tests each passed twice; all 752 frozen source hashes match. Exact source archived in candidate-source.tar.gz. Local Developer ID build ACTIVE in exec session 96113, local-release/driver.log; settings parity PASS with only signing differences. Do not duplicate it. After PASS run compare_payload.py, compare_functional_payload.py, then guarded package.py; inspect receipts and preserve baseline app. Intel physical/CPU acceptance still NOT RUN. No install, commit or push.
+
+### Full gate progress — 11 October 2026
+
+Exec session 88263 remains active; do not duplicate it. Native warm build and repository-access preflight PASS; all 123 Python checks PASS. First full native configuration: 4,638 XCTest passed, 62 existing skips, zero failures, plus 532 Swift Testing passed. Second configuration is running without failures so far. Fair span-only synthetic Debug benchmark on this Apple silicon host: 16,000 observations / 100 records, per-record derivation 1.0743s, batched derivation 0.01617s, outputs exactly equal. This is not an Intel whole-app CPU measurement.
+
+Final test/source candidate compiled successfully, including the explicit Phase/calibrated coordinate regression. Candidate includes preserved current canonical preexisting offline inspection and optional MIDI timing diagnostics; comparison to the prior packaged source is recorded in baseline-source-comparison.json and preexisting-app-delta.patch. repair-only.patch contains only this task's seven source/test changes. Local release driver, strict Store/local functional comparison and guarded package.py are prepared but NOT RUN; full gate must pass first. Final delivery target is Downloads/SL-Capture-Intel-CPU-Fix-2026-10-11.zip. Intel acceptance remains NOT RUN; installed baseline unchanged.
+
+### Current verification checkpoint — 11 October 2026
+
+Focused gate PASS: 420 actual XCTest executions passed, two optional-fixture skips, zero failures; receipt `focused/software-tl0szx5v/receipt.json` has childReaped=true and no survivors. Its compiled tests precede the final explicit Phase/calibrated-coordinate case and fair span-only timing harness; those final test changes are included in the full candidate. The first benchmark timed extra reason validation and is not an exact old/new performance ratio. Do not report it as Intel improvement.
+
+Full gate ACTIVE in exec session 88263: `/private/tmp/sl-capture-cpu-20261011/run_full.py`; driver log `full-driver.log`, full/native/platform evidence below that root. Frozen standalone candidate at `verification` matches 752 canonical files at launch. Canonical task records may advance while verifier remains frozen. Do not duplicate this invocation or edit the verifier. Required full PASS, signed universal package and Intel comparison remain pending. Only completed focused Products/Intermediates/DerivedData were reclaimed after verified process exit; logs/results/receipts retained.
+
+Intel sample UUID exactly matches installed 6 October x86_64 binary: `178906F5-AF19-36A8-B9B4-60D662E4300E`. `sample-provenance.json` binds the sample and baseline binary hashes. No production app replaced or launched.
+
+## 11 October 2026 — Intel CPU/lag repair, verification in progress
+
+Explicit user task: fix SL Capture consuming 186% CPU and making a 2020 Intel 13-inch Mac lag. Supplied `Sample of SL Capture.txt` shows repeated SwiftUI main-thread work including live canonical projection/mixer derivation, full MIDI decoder source-string allocation, and duplicate review-onset detection. This is sampled stack evidence, not an Intel before/after measurement.
+
+Canonical checkout: `codex/cxl-fader-checkpoint-20261003`, HEAD `5e59ca85e70a2a0ecb78224ed72e83a5fd4c6294`. Preserve all preexisting Phase/S9, derived-inspection, project and authoring changes. Baseline hashes/status/patch and seven changed source/test backups are in `/private/tmp/sl-capture-cpu-20261011/`.
+
+Implemented: prepare CXL live canonical projection and reasons on the existing serial polling queue; publish motion/mixer/projection together with at most one UI publication pending; compare presentation on the worker; omit DEBUG-only diagnostic preparation from release. Shared mixer projection derives the timeline once and clips per gesture. Decoder compares source/channel without per-event interpolated strings. Live onset summary and marks share a detector pass. Raw observations, source/coordinate/gap rules, export schemas and recorder cadence remain unchanged. This is not an incremental MIDI decoder.
+
+Focused gate is running in `focused/software-tl0szx5v` (exec session 82285); tracker suite: 130 passed, one optional fixture skipped. Draft/export, rendering and mixer checks pending. Standalone hash-matched snapshot: `/private/tmp/sl-capture-cpu-20261011/verification`; full driver prepared at `run_full.py` but NOT STARTED at this checkpoint. Do not duplicate active verification. No install, commit or push. Intel CPU, UI smoothness and physical capture acceptance remain NOT RUN. Keep Codex/build work on this Apple silicon Mac; use Intel for the same-load comparison after delivery.
+
+## 6 October 2026 — Phase B / DJM-S9 software VERIFIED; app INSTALLED; physical acceptance PENDING
+
+Root cause: release Phase selection only selected endpoints; the production DVS audio/notation/finalization/export path was missing. Implemented separate Serato programme 5/6 and raw Phase control 3/4 capture, current-connection forward polarity, confidence-bound dense notation, portable raw evidence, truthful external fader gain and route-specific UI. Decoder/loss rules and existing Rane acceptance are preserved.
+
+Required scripts/build.sh all PASS: 9,224 XCTest passed, 124 existing skips, zero failures; 1,064 Swift Testing and 123 Python passed. All 17 new Phase tests passed twice. iOS/macOS Release/Capture Release/Watch builds PASS. Existing local Developer ID overlay build, full executable/resource equivalence, signatures and ZIP roundtrip PASS. Exact candidate installed at /Users/karlwatson/Downloads/SL Capture Pro DJ/SL Capture.app; executable SHA-256 e67379a8c526da451e96ee012c73e97f4557fbd7b11db3ac8a1de89240011ed1. Rollback: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-05/phase-s9-implementation/rollback-installed/SL Capture.app. ZIP: /Users/karlwatson/Downloads/SL-Capture-Phase-S9-2026-10-06.zip. Version remains 1.0.1 (24), universal, macOS 15+, signed but not notarized.
+
+Launch NOT RUN because the Mac is locked; do not bypass the lock. One combined operator check was requested after unlocking: choose Phase DVS + DJM-S9, complete forward check, then verify forward/back notation, clean AHHH and both fader cuts in a saved take, plus reopen/export. Record only the acceptance actually reported. Do not repeat the earlier raw routing investigation. Physical acceptance remains NOT RUN until confirmed.
+
+Canonical branch/HEAD/index and unrelated dirty files preserved; no commit/push. Source-only task patch has 23 paths. Current standalone verification clone: /Users/karlwatson/ScratchLab-Local-Evidence/verification/phase-s9-20261006, same frozen candidate as the retained old verifier. No tests/builds remain running. Evidence, failed attempts, source hashes, delivery/install receipts and full changed-file list: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-05/phase-s9-implementation/REPORT.md. Do not rerun matching gates without changed inputs or a new failure.
+
+--- Earlier records retained below ---
+
+## In progress — Phase B / DJM-S9 production route, 6 October 2026
+
+User explicitly said to proceed and get Phase/S9 working. Latest ETA given: roughly 60–90 minutes assuming gates pass; installed app unchanged. Continue implementation and verification; do not mistake this checkpoint for completion.
+
+Canonical checkout remains this directory, branch codex/cxl-fader-checkpoint-20261003, HEAD 5e59ca85. Initial dirty/untracked baseline is preserved at /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-05/phase-s9-implementation/{before-hashes.json,before.patch,before-status.txt,before-head.txt,before-index.patch}. Preserve unrelated derived-inspection, parser and authoring work. No commit/push/install in this implementation turn.
+
+Implemented WIP: PhaseDVSRecordingEvidence.swift (typed per-callback control evidence, explicit current-connection polarity, take-local coordinates, unknown gaps); PhaseS9InputCapture.swift (input-only 48kHz 8-channel HAL ingress, existing bounded ring, existing decoder and stability confidence gates, programme 5/6 + raw control 3/4 WAVs); interleaved ring ingress; Phase-specific camera-bound audio finalization; shared live/final projection; source-bound bridge/preflight; raw-control companions in draft/session/reference exports; route-specific Serato ownership UI. Project additions are source/test membership only. Signing/resources/identities untouched. Decoder thresholds and existing Rane pipeline unchanged.
+
+Focused corrected invocation 6 passed 43 actual XCTest tests (16 PhaseDVSCaptureTests + 27 TimecodeRealtimeIngressRingTests), receipt focused/software-7slz21us. Invocation 2 executed ZERO tests because the target prefix was duplicated and is explicitly NOT coverage. Earlier failures (fixture review limitations and programme truncation handling) were repaired; all receipts retained. A final Int.min polarity regression and strengthened external-fader test are included in the frozen full candidate. Task-only 22-path patch applied successfully to the existing verifier, excluding unrelated dirty canonical work. Required scripts/build.sh all driver is active (exec session 19066), evidence full-gate and native-cache; warm test build PASS, repository access probe in progress. Full gate, local release package, installation and physical acceptance remain pending. No overlapping build should be launched. Reclaimed approximately 6.5 GiB of task-only completed focused Products/Intermediates/DerivedData after verifying childReaped/no survivors; test logs, results and receipts retained. See build-output-cleanup-receipt.json.
+
+Remaining before delivery: inspect focused result, fix failures; test raw companion verification/export/draft round trips and actual audio finalizer with deterministic inputs; audit lifecycle (stop/cancel/missing Phase finalization must never fall back to camera), stale connection/source admission, source-bound geometry, S9 MIDI fader support. Complete a source-preserving candidate in existing isolated verifier /Users/karlwatson/ScratchLab-Local-Evidence/worktrees/commit0-verification-20260929, carrying only task hunks over its prior verified app. Run focused and scripts/build.sh all required gates without duplicating an active process; repair failures without weakening evidence rules. Then use existing staging/signing configuration to package/update app. Physical check remains NOT RUN and must be one short combined direction/audio/fader/save/export check after installation, not another routing take now.
+
+Existing raw routing recordings operator-c4479659b811 and operator-bce943036f80 under phase-s9-dvs-route are retained. They establish 3/4 control and 5/6 separate audio for current configuration. No physical direction, calibrated revolutions, stationary holds, losslessness or subjective AHHH acceptance inferred. Exact sample-time continuity is the loss criterion, matching existing onboard recorder. Per-callback host timestamps have real sub-buffer jitter (max about 3 samples in first saved input), so blocks use the sample clock anchored to first host timestamp and retain original host times rather than inserting false gaps. Original sample-time gaps or host regressions still fail closed. Existing stability filter admits raw frames unchanged; no EMA geometry, silence holds or decoder overrides. The two saved inputs contain confident same-direction runs of 35/32 callbacks respectively; this is diagnostic evidence, not physical polarity confirmation.
+
+### Verification infrastructure correction — 6 October 2026
+
+The initial full driver used a new test identity; access preflight timed out. Restoring the retained identity also timed out. Both samples show the test blocked at Data(contentsOf: indexURL), CaptureReliabilityPhase1Tests.swift:4593; the existing verifier points its Git index into Downloads. Receipts and samples retained, no changed assertions or extended timeout. Created self-contained local clone /Users/karlwatson/ScratchLab-Local-Evidence/verification/phase-s9-20261006 with the same 35bc27f HEAD and byte-identical 728 frozen candidate files, no object alternates and an independent local index. See standalone-verifier-receipt.json. New full gate active in exec session 64862 using the established test identity and unchanged tests/deadlines. No production install, commit or push yet.
+
+### Full regression checkpoint — 6 October 2026
+
+The standalone verifier passed the unchanged 120-second repository-access preflight. Its first full run stopped at the first test failure after 2,974 passing XCTest executions: ReferenceTearCanonicalProjectionTests.testTheCoordinateContractIsDeclaredAtItsSourceBoundaries required the old literal coordinates expression. The new explicit Phase take-local basis and legacy take-local default are intentional; the assertion now checks that exact source boundary, preserving all coordinate/loss requirements. Applied only this test hunk to canonical and both verifier copies, retaining unrelated ReferenceAuthoringTests.swift dirt. Task-only patch now has 23 files. Failed receipts are full-gate-coordinate-assertion-failed and native-cache/*.coordinate-assertion-failed; they are not passes.
+
+Corrected full run is active (exec session 15008) in /Users/karlwatson/ScratchLab-Local-Evidence/verification/phase-s9-20261006. Do not duplicate it. Driver full-driver.log, results full-gate and native-cache. Existing isolated worktree remains preserved. Canonical HEAD/index/unrelated file bytes remain unchanged (preservation-audit.json). Installed app still previous SHA 552800295d1c04a09a66c72bd858fbdf7958f3d115e17e2dcdc0e4f0d0c9aa74 and closed. Local release, payload comparison, packaging and atomic update helpers are prepared but not run; they require full PASS. Physical acceptance remains NOT RUN.
+
+# 2026-10-04 — Generic SL Capture professional-DJ package VERIFIED
+
+The new generic handoff is /Users/karlwatson/Downloads/SL-Capture-Pro-DJ-2026-10-04.zip.
+It contains the full universal SL Capture Mac app, generic install/capture guides
+and a build receipt. macOS 15+. Developer ID signed; NOT notarized. Read the
+app-specific installation steps. New-Mac launch and each DJ's rig acceptance
+remain NOT RUN. No production app was restarted or replaced.
+
+Removed performer-specific visible branding and the hard-coded CXL performer
+fallback. Setup now requires the actual DJ / performer name. The serial session
+locks that name with the capture setup and writes it to finalized metadata;
+the capture bridge uses the same name for raw sidecar/session export configuration.
+New scratch permits switching DJs. Existing takes keep their recorded names and
+source identities; bundle IDs, schemas, storage keys and signing settings remain.
+The companion waiting text also uses SL Capture. No Learner or decoder changes.
+
+Software PASS: focused 322 XCTest executions. Required scripts/build.sh all:
+9180 XCTest passed, 124 skipped, 0 failed; 1064 Swift Testing and 122 Python passed.
+iOS, full macOS Release, Capture Release and Watch builds PASS. Existing local
+Developer-ID overlay build PASS. Exhaustive Store/local functional payload
+comparison PASS for both architectures (signatures, UUID and exact debug path
+changes classified). Stage identity and strict codesign PASS; ZIP round-trip
+content equality and extracted signature PASS. Physical acceptance not invented.
+
+Canonical HEAD remains 05ad7b0 with unrelated dirty/untracked work preserved.
+The existing verifier is 35bc27f plus the exact uncommitted candidate.patch;
+its new hashes bind these results. Do not reset it or call it clean.
+No commit/push or external upload. Current guide: docs/sl_capture_quick_start.md.
+Full files, receipts, hashes and preservation report:
+/Users/karlwatson/ScratchLab-Local-Evidence/2026-10-04/generic-capture/REPORT.md.
+
+Next: use this generic package for all participating DJs; enter actual performer
+names and verify one short record/play/save/reopen/export on each new rig before
+collecting the teaching set. Preserve prior accepted capture/audio/renderer
+results within their original scope. Do not repeat software gates without changed
+inputs or rebrand historical performer attribution as generic data.
+
+--- Earlier checkpoints retained below ---
 
 # Current checkpoint — Batch 2 final verification BLOCKED / NOT VERIFIED
 
@@ -105,6 +367,96 @@ Immediate cause of these two failures is an executor-added TEST FIXTURE defect: 
 Stopped under the user's explicit STOP-on-failure instruction; no fixture fix or further production work after the failed gate. Slices 3 (late finalization), 4 (bounded observability), historical-document reconciliation, full build/test gates, final export/notation parity verification and fresh MacAnalyzerView semantic audit are NOT RUN. Only these handoff/continuation checkpoint headers were added; historical docs and product decisions are preserved. TASKS is not marked complete. Do not run old installation/release/physical prompts below.
 
 Preservation so far: all 19 pre-existing untracked files are hash-identical, both intentional deletions remain, duration-diagnostics is unchanged, no index changes. All original passive diagnostic addition blocks and offline validator/test addition blocks remain byte-identical. Notation implementation, exports, project/resources, shipping-media UI and all other tracked files outside the six implementation/test paths remain hash-identical to preflight. Protected cxl_baby_target.json SHA256 remains459264664bbd116610440ac179c1060e6b81d0a0ef1923016605ef5d36fed309. Build used the existing isolated shippingmedia verification host/cache, with no project signing/language/isolation edits. No physical capture, device setup, deployment, install, upload, commit or push. Nothing changed in Learner or Downloads checkout.
+
+# Shipping-media de-scope / silent Watch — SOFTWARE VERIFIED, 26 September 2026
+
+The user resolved the prior stop: keep Watch as silent authored canonical notation. Existing LaneClock now supports bounded Date-anchor completion, with start BPM retained. Mac PracticeGameplayCoordinator and the existing iOS session timer complete without audio/EOF. Baby uses the existing canonical forward/backward, fader-open cycle, never DVD trajectory data. Listen is unavailable. Unsupported canonical techniques show unavailable Watch controls.
+
+Removed Reference Examples view/navigation/UI playback tests, local-library project linkage, archival demo screen/export builder, Practice audio state/consumers/fallback, and archive resource-copy entries. Source media and research infrastructure remain offline. User-capture review, live/MIDI/DVS/Watch capture, canonical authoring and scoring algorithms are preserved. Derived model/validator/IO/producer/earlier tests match previous verified hashes and have no runtime consumer.
+
+Final receipts: Build/shipping-media-descope-20260926/RESULT.md. Focused137 unique/274 executions, no failures/skips. Bounded451 unique/902 executions:900 passed,2 pre-existing optional take-003 skips. Python14/36/87 pass. Final scripts/build.sh all exit0: iOS, universal full Mac Release, universal CXLRelease and Watch. Final resource/call-site audit, source hashes and git diff --check pass. Isolated host com.machelpnz.scratchlab.shippingmedia.verify.20260926/team2DDKGL33BU/sandbox was verified before tests. No native archival smoke, installation, commit or push.
+
+IMPORTANT LIMIT: five live instrument-bank WAVs (ScratchSamples plus VirtualPlatter/ahhh.wav) remain. Their addition commits do not establish original ownership or archival independence. They are not Watch/Listen sources; removal would affect explicitly preserved live capture. Do not claim whole-bundle provenance certification or release clearance. Full XCTest suite was not run; other historical media-bundle tests need separate offline-fixture migration/retirement, not reintroducing archive resources.
+
+Protected untracked cxl_baby_target.json and unrelated dirty work remain untouched. Both removed source/test files are recoverable from Git; no media was deleted. Historical investigation/review Build receipts and external evidence remain intact. Await a new bounded request; do not process media or redesign technique models automatically.
+
+## Superseded audit stop
+
+The latest user request supersedes the prior completed derived-review de-scope. No production/resource/test edit was made: the user's explicit stop condition was reached. Removing archival Practice audio breaks existing demo timing/state. MacAnalyzerView enters practiceCoordinator.beginWatch(), starts ScratchLabDemoModeController using cxl_baby_target.wav, and finishes watching only on demoPlayer.isPlaying true-to-false. Missing audio leaves the controller not ready and supplies no completion transition. iOS PracticeModeView Demo lanes use demoPlayer.sampledPlaybackTime(), which remains zero without a player. A muted/missing resource is not an implemented silent notation clock.
+
+Required decision before implementation: preserve Watch as a silent preview driven by an explicitly selected existing non-audio notation clock (with honest unavailable Listen controls), or retire/disable archival Watch/Listen surfaces while preserving Copy/scoring. Do not invent a replacement recording or silently map a procedural beat to scratch motion. Existing generated beat/count-in synthesis is not a scratch demonstration.
+
+Read-only dependency audit: ReferenceAuthoringView and MacAnalyzerView expose ScratchExampleLibraryView; its ScratchExampleReviewState loads ScratchExampleLibrary.loadBundled and verifiedURL for video/audio/model/cache playback. ReferenceExamples has retained project file/build declarations but is absent from the current resource phase file lists. LocalReferenceLibrary has a pre-existing external symlink; do not touch external evidence. CoachDemoAudio and PracticeReelAudio are active folder resources on Mac/iOS. cxl_baby_target.wav is routed by ScratchLabPracticeReference through MacAnalyzerView and PracticeModeView. baby/chirpflare coach instruction JSONs select recorded noBeat WAVs. DemoAudioResolver falls back to baby_reel_callresponse.wav. MainMenuView/MacAnalyzerView demo export calls ScratchLabDemoSessionBuilder.makePackage, which copies baby_noBeat.wav into a generated session. The reel builder uses Baby1...Baby4 recordings, not synthesis; their ultimate original/archive provenance is not established by this audit. Do not treat an old generated-asset log entry as current provenance.
+
+Keep legitimate capture review, ReferenceFinalizedMediaReviewController, captured Review/NotationVisualizer branches, MIDI/DVS/Watch, scoring, abstract babyScratchCycle and offline research intact. Performance-specific demo/reel/stroke timelines are not interchangeable with the abstract cycle. No builds/tests/media playback/extraction or external-folder changes in this audit. git diff --check passed and unrelated dirty/untracked state including cxl_baby_target.json is preserved. Only these two handoffs record the stop. No commit/push/install. Prior verification below applies to the earlier slice, not this unimplemented shipping-media removal.
+
+--- Prior completed derived-review runtime de-scope retained below ---
+
+# Derived Reference Review runtime intentionally de-scoped — 26 September 2026
+
+Current user direction: archival/Qbert/DVD video and audio are OFFLINE RESEARCH ONLY. The recent runtime Derived Reference Review feature has been removed from the existing macOS authoring view/model, including file pickers, AVPlayer/playhead state, Accept/Reject controls and review-copy writing. No native Open/Save/video smoke test is required or authorized. Earlier successful UI verification is historical evidence only, superseded by this product-direction change; preserve Build/derived-review-20260926 unchanged.
+
+Preserved: DerivedReferenceInspectionDocument, strict validation/read/decode, optional offline review annotations, producer tooling and research fixtures/tests. Removed only the 12 UI tests; added two pure offline annotation decode/round-trip cases. No application consumer of the inspection type remains outside its model/validation/IO definitions. No canonical, learner/scoring, capture/MIDI/DVS or abstract-technique model changes. Existing Reference Examples/ScratchExampleLibrary and Practice audio paths are explicitly outside this slice and still require a separate shipping-media de-scope. Do not claim the whole application is archive-free yet.
+
+Verification COMPLETE: focused108 unique/216 executions and bounded regression238/476 pass, zero failures/skips/runtime warnings. Python producer14/dataset36/capture87 pass. Normal scripts/build.sh all exits0: iOS, full Mac Release, CXLRelease and Watch pass. Isolated sandboxed test host com.machelpnz.scratchlab.deriveddescope.verify.20260926 was verified before execution. Source/preservation hashes match; git diff --check passes. Receipts: Build/derived-descope-20260926/RESULT.md. All unrelated work and protected untracked cxl_baby_target.json preserved. No commit/push/install. Any older shipping-media removal requires a separate bounded request.
+
+--- Superseded historical UI handoff follows; do not perform its smoke check ---
+
+# macOS Derived Reference Review — historical software verification, 26 September 2026
+
+User selected one macOS review UI slice on canonical main/79fb3ec; all earlier dirty work remains. Reference Authoring now offers Open Derived Evidence… and an in-workflow sheet. Existing ReferenceAuthoringViewModel solely owns the normalized DerivedReferenceInspectionDocument, notes/reviewer, playhead and selected AVPlayer preview. ReferenceAuthoringSession/ReferenceTake/ReferenceRegistry and all canonical sections of model/validator/IO are unchanged. No canonical conversion, training, learner, MIDI/DVS, detector or further media processing. No commit/push/install.
+
+Physical platter angle is NOT ESTABLISHED. Numeric/graph motion is explicitly IMAGE-PLANE DERIVED MOTION. UNKNOWN, interpolated, suspect, unavailable and manual exclusions remain distinguishable without replacing trajectory. Optional additive v1 review.annotations carries validated analysis-frame intervals, kind/reason, reviewer and evidence reference; old documents/producers remain supported. No automatic quality-screen adapter or annotation editor. Missing annotations are not a quality pass.
+
+Accept for Authoring retains approvedDerived internally; Reject Evidence retains rejected. Both save a NEW validated inspection JSON through existing ReferencePackageIO before changing the loaded decision. Existing files are refused; source/samples/turnarounds/audio/lag remain unchanged. All trust/eligibility stays false. Reviewer is recorded attribution, not authentication. Video is explicitly selected locally, never resolved from metadata; no media copy/store. Approximate alignment is operator-selected and transient; default independent. Exact PTS/rational clock, videoAssetID/take, hash-bound media and exclusion uncertainty brackets remain deferred and visibly missing. Raw processed-library investigation outputs are not directly importable normalized documents.
+
+Verification: 12 new focused cases; combined focused27 unique/54 executions and final bounded canonical/authoring regression248/496 pass, zero failures/skips. Python producer14/dataset36/capture87 pass. Final scripts/build.sh all exits0 with iOS, full universal Mac Release, universal CXLRelease and Watch passing. Native hosted review snapshot visually inspected; initial blank ImageRenderer output was caught and replaced with a nonblank hosting-hierarchy test. Tests use isolated products/caches and sandboxed non-production bundle/container com.machelpnz.scratchlab.derivedreview.verify.20260926. No production app launched/installed. Receipts/commands/limitations: Build/derived-review-20260926/RESULT.md; contract/UI: docs/derived_reference_inspection.md.
+
+Native Open/Save panel permissions and actual selected-video playback remain manual smoke checks, not software-proven. Protected untracked ScratchLab/Resources/CoachDemoMotion/cxl_baby_target.json remains untouched/unstaged. Preserve external investigations and all earlier dirty work. Next work needs a new bounded request; do not process more techniques or pursue physical degrees based on this UI.
+
+--- Prior offline-producer handoff retained below ---
+
+# Offline derived-inspection producer — software verified, 26 September 2026
+
+Completed the user's next single offline-tooling slice on main/79fb3ec; existing uncommitted Swift inspection architecture preserved unchanged. scripts/dataset_processor/ingest_media_scratch.py now dispatches derived-inspection to an adjacent serializer. It reads reference.json/trajectory.csv, Audio V2 fusion/turnaround evidence and AV-lag reports; outputs the existing scratchlab_derived_reference_inspection_v1 contract. No extraction, detector/gating changes, library rebuild, UI/runtime consumer or canonical/learner/training conversion. Historical source/training vocabulary remains provenance only.
+
+The POC has no performanceID: caller supplies the established qbert_makemkv_dvd/Baby_79bpm identity for BOTH development and holdout. Embedded IDs are preserved; conflicts fail. Reference metadata owns FPS/start/duration. Audio's copied vision fields must agree; no audio/lag can rewrite vision. Lag bestPearson rows preserve feature/subset and reported diagnostic FPS; full curves remain external. All output is needsReview with false hardware/canonical flags. Output creation is deterministic, exclusive and outside the evidence tree; --video-only is explicit, never a missing-audio fallback. Usage/limits: scripts/dataset_processor/README.md and docs/derived_reference_inspection.md.
+
+Verification: producer Python14, dataset regression36, capture87; focused15 unique/30 executions and bounded reference regression199/398 pass, zero failures/skips. Normal scripts/build.sh all exits0 with iOS/fullMac Release/CXLRelease/Watch builds passing. Full POC outputs:360 samples each,23/17 turnarounds, same performance. A test-only output-root run reads generated full JSON through ReferencePackageIO. Initial Python-from-sandbox XCTest attempt failed; corrected tests use Python-generated golden equality plus Swift IO reads, without changing sandbox/signing. Receipts: Build/derived-producer-20260926/RESULT.md. Full XCTest suite and physical validation not run.
+
+Preservation: all ten external POC inputs and all three Swift production files match pre-turn SHA256. Protected ScratchLab/Resources/CoachDemoMotion/cxl_baby_target.json remains untracked/unstaged and SHA256459264664bbd116610440ac179c1060e6b81d0a0ef1923016605ef5d36fed309. No commit/push/install or media mutation. Sparse data/source identity/rights/reviewer authenticity are not authenticated. No further feature work is authorized by this completion.
+
+--- Prior inspection-boundary handoff retained below ---
+
+# Derived inspection boundary — software verified, 26 September 2026
+
+The user resolved the earlier architecture stop: derived evidence is an inspection document within existing Reference model/validation/IO files, never ReferencePackageManifest. Implemented one slice on canonical main/79fb3ec, with no commit/push. Read-only Developer-directory MKV/DVD audit completed first; full inventory, schema authority, reuse decisions, duplicates and limitations are in `docs/derived_reference_inspection.md`. No media pipeline, detector, hum filter or external dataset was changed or rerun.
+
+Implemented immutable Codable/Sendable DerivedReferenceInspectionDocument in ReferencePackage.swift, strict direct-decoding validation through ReferenceValidator, and ReferencePackageIO decode/read methods. Explicit derived discriminator/false trust flags, source/performance identity, metadata-owned FPS, vision estimates/confidence/interpolation, turnarounds, gated audio support, per-window AV diagnostics and explicit derived review. No canonical/take/registry conversion or runtime consumer. Historical primary_training remains inert provenance. This is a normalized JSON boundary, NOT a raw POC CSV/MKV assembler or UI.
+
+Existing canonical package/validator/IO implementations compare byte-identically with HEAD after excluding the added inspection sections. ReferenceTake, ReferenceRegistry, authoring capture/UI, learner/MIDI/DVS, sidecars/export, project membership, signing and resources unchanged. New tests are in existing ReferenceAuthoringTests.swift; two small JSON fixtures load from the source tree, not the app bundle.
+
+Verification: focused 12 unique tests/24 executions, then bounded reference/approval/package-codec gate 196 unique/392 executions; all pass, no skips/runtime warnings. Python capture fixtures 87/87. `PATH="$PWD/Build/derived-inspection-20260926/bin:$PATH" scripts/build.sh all` exit 0; iOS, full Mac Release, CXLRelease and Watch builds pass. Wrapper only selects the six named test classes and reuses existing generated build caches with the prior SWIFT_ENABLE_EXPLICIT_MODULES=NO workaround. Full XCTest suite not run. Evidence: `Build/derived-inspection-20260926/RESULT.md`, logs and xcresults. git diff --check passed.
+
+Protected cxl_baby_target.json remains untracked/unstaged and SHA-256 459264664bbd116610440ac179c1060e6b81d0a0ef1923016605ef5d36fed309. No install or hardware acceptance. Remaining limits: source references/gate declarations/reviewer identity are not authenticated; original media absolute accuracy and independent-session generalization are unproven. A future producer should extend the existing offline tooling to emit the normalized document; do not invent a second DVD pipeline. No further implementation is authorized by completion of this slice.
+
+--- Pre-approval audit retained below; the approved implementation above supersedes its stop status ---
+
+# Derived platter evidence boundary — stopped before implementation, 26 September 2026
+
+Current task uses this canonical checkout only: `/Users/karlwatson/Developer/ScratchLab-CXL-Final-Capture-Fixes-20260913/source`, `main`, HEAD `79fb3ecd74d261de5f3fd1f8b1434b620077ae3c`, ahead of origin/main by three. The sole pre-existing untracked file is `ScratchLab/Resources/CoachDemoMotion/cxl_baby_target.json`; do not modify, remove, stage, restore, clean or absorb it. No branch integration, commit, push, installation or source-media mutation is authorized. Historical release instructions below do not authorize those actions for this task.
+
+User selected one offline videoDerived/videoAudioDerived model/import slice and explicitly required stopping on an incompatible canonical-reference contract rather than inventing another reference architecture. Audit inspected the eight named model/IO/authoring files, related notation provenance, registry eligibility, example catalogue and tests, and the full external `ScratchLab-Platter-POC/SCRATCHLAB_DERIVED_REFERENCE_CODEX_HANDOFF.md`. Both intervals' listed JSON/CSV evidence was parsed; calibration images were viewed, review-video streams inspected, and source ZIP contents listed. Media was not manually adjudicated.
+
+Stop condition: `ReferencePackageManifest` represents an approved canonical performance, not a general inspection document. It requires capture metadata, a selected repetition, approval and hardware artifact roles. `ReferencePackageValidator.manifestIssues` refuses noncanonical lifecycle states; `registryEntry` turns a passing manifest into a published entry. `ReferenceRegistryEntry.isServable` checks lifecycle, with no package-source discriminator. `ReferenceTakeSourceIdentity`/`ReferencePerTakeSourceState` describe take/Watch identity, not hardware-versus-video provenance. Notation's inferred/measured provenance does not guard package eligibility. Existing source-example catalogues are deliberately separate from approved references and do not provide this requested platter import contract.
+
+No production implementation or tests added. Proposed decision for the next turn: authorize a discriminated inspection document in the existing ReferencePackage model/ReferenceValidation/ReferencePackageIO layers, retaining the current canonical manifest and its publication gates unchanged. A derived payload would never convert to ReferenceTakeEvidence or a registry entry. This proposal is not an implemented or approved contract; resolve the user's architecture stop condition before proceeding.
+
+Evidence details: both reference.json files declare videoDerived, hardwareGroundTruth=false, canonicalReference=false and analysisFPS=59.94005994005994; source starts are 18 and 24 seconds. Frame duration is derived from that declared FPS (16.683333333333334 ms), not CSV differences. Audio v2 declares modifiesVisionTrajectory=false and noBeat semantics including possible speech. Holdout has 95 inactive_platter frames of 360; their raw RMS must not become motion evidence. AV-lag reports declare approximately 59.94125756758216 FPS from rounded CSV; preserve their original diagnostics but never use that rate as the canonical timebase. Source datasetMetadata.trainingUse=primary_training is historical metadata, not ScratchLab approval. Raw validation files differ in schema/content and include nonauthoritative timing results; preserve them without treating them as canonical labels or calibration. Both intervals belong to the same source performance.
+
+Verification: read-only contract audit and `git diff --check`; focused XCTest and scripts/build.sh were not run because implementation stopped at the explicit pre-edit architecture gate. No derived ingestion success is claimed. Only this handoff and `AI_HANDOFF/next_prompt.md` were updated to record the blocker. Task remains incomplete.
+
+--- Historical release handoff follows; current task scope above takes precedence ---
 
 # CXL release finish — active 4ca4 worktree, 13 September 2026
 
@@ -1244,6 +1596,232 @@ Selected documentation is insertion-only reconciliation history relative to comm
 - [ ] Karl's physical hardware acceptance; software success is not hardware proof.
 
 
+## 2026-09-29 — Committed-candidate full gate HARD STOP
+
+Final reconciliation HEAD: `1e6947255d0ac25a666f6fadfc9318792dabb0a2`. Review/export `0822538` (194 methods / 388 executions, all passed), deterministic fixtures `565cec6` (181 methods / 362 executions, 360 passed, two existing hardware-fixture skips), and append-only documentation `1e69472` were committed after exact candidate audits. No push or history rewrite.
+
+The clean local worktree ran unmodified `scripts/build.sh all` with real-device integration disabled. Python 119/119 passed. Native first configuration: XCTest 4,549 passed / 62 skipped / 0 failed; Swift Testing 532 passed. Second configuration stopped at an ACTUALLY EXECUTED failure in `ReferenceTearEvidencePipelineTests/testPhysicalRightPlatterForwardPushRisesInLiveAndFinalizedNotation`, `ReferenceAuthoringViewModelTests.swift:240`: two JSON encodings of the raw fixture were each 30,182 bytes but differed. Root cause is not established. Partial second-run XCTest: 2,966 passed / 24 skipped / 1 failed; remaining tests and second Swift Testing run incomplete.
+
+Immediate containment produced supervisor status INFRASTRUCTURE ERROR / exit 70 because it was interrupted after the real test failure; child reaped, zero survivors. Do not misclassify the initiating failure as infrastructure-only. Interrupted xcresult lacks Info.plist; raw-log accounting is retained. No retry or repair. iOS, full macOS Release, CXLRelease, watchOS, install and smoke NOT RUN for this final SHA. Hardware and real-device integration NOT RUN.
+
+BLOCKED — COMMITTED CANDIDATE VERIFICATION FAILED. Stop; a separately authorized bounded investigation is needed before any retry or downstream work. Preserve all commits, canonical working bytes, unrelated dirty work and historical evidence. Full report: `/Users/karlwatson/ScratchLab-Local-Evidence/2026-09-29/selective-reconciliation/final-committed-gate/REPORT.md`. All new evidence remains outside iCloud under ScratchLab-Local-Evidence. This post-gate record is an intentional uncommitted append; it does not change the verified candidate SHA.
+
+
+## 2026-09-29 — Bounded ReferenceTear JSON investigation: NON-REPRODUCTION
+
+Authorized one exact-method reproduction at unchanged HEAD `1e6947255d0ac25a666f6fadfc9318792dabb0a2`. Actual class: `ReferenceTearEvidencePipelineTests`, method `testPhysicalRightPlatterForwardPushRisesInLiveAndFinalizedNotation`, in ReferenceAuthoringViewModelTests.swift. Temporary local-verification-only logging captured the exact two Data operands before the unchanged byte assertion. One invocation, both Debug configurations: 1 method / 2 executions, 2 passed, 0 failed, 0 skipped; supervisor PASS, child reaped, zero survivors.
+
+Each configuration's LIVE/FINALIZED pair contains identical 30,182-byte UTF-8 JSON arrays of 201 raw MIDI events. Recursive comparison found zero semantic differences, preserving array order and exact numeric values; actual `[CaptureCore.RawMixerMIDIEvent]` decoding and Equatable comparison returned true. No differing assertion pair was captured. The original failure cause remains UNPROVEN; do not assume key ordering from cross-process hash differences.
+
+CASE D / HARD STOP under the authorization's non-reproduction rule. Diagnostic logging removed exactly; verification checkout clean. No test repair, production edit, regression addition, new commit, broader test invocation, full-gate retry, platform build, install or smoke. Existing failed full-gate status remains BLOCKED. Original failure notes preserved. Report and exact payload hashes: `/Users/karlwatson/ScratchLab-Local-Evidence/2026-09-29/reference-tear-json-investigation/REPORT.md`. Any further reproduction strategy requires separate authorization; current evidence does not permit the Case A repair.
+
+
+## 2026-09-29 — Failure-context reproduction INCOMPLETE: storage containment
+
+HEAD remains `1e6947255d0ac25a666f6fadfc9318792dabb0a2`. Historical raw-log reconstruction placed target `ReferenceTearEvidencePipelineTests/testPhysicalRightPlatterForwardPushRisesInLiveAndFinalizedNotation` in Configuration2 after the hold-count and open/closed-fader archive tests. One containing-source-file invocation selected all six XCTest classes. Configuration1 completed123/123, including target PASS; Configuration2 completed58 passing tests but was contained before target. No test failed in this attempt. Prefix and broad reproductions NOT RUN. Do not classify as completed historical non-reproduction.
+
+First captured pair:30,182bytes each,201events, validUTF-8JSON, identicalSHA256 `96edbda5edb3b2037e5461b5ae4a0b6688b2ceea8ba446e385b0ce889c1c638d`; zero raw/semantic differences, actual typed equality true. Historical failure root cause, production defect and test-isolation defect remain UNPROVEN.
+
+New runtime snapshot revealed macOS redirected test TMPDIR into `/Users/karlwatson/Library/Containers/com.machelpnz.scratchlab.nativegate.e6742b7e3fb3/Data/tmp`, overriding external local TMPDIR. Path is outside iCloud but outside the user-required local evidence root. Run contained upon verification; supervisor INFRASTRUCTURE ERROR/70 from deliberate interruption, child reaped, zero survivors. Residual test-owned sandbox temporary files left untouched; no historical evidence moved/deleted. Logs/products/results/payloads stayed under local evidence root.
+
+Temporary diagnostic patch removed byte-for-byte. Canonical source/test unchanged; existing dirty bytes preserved. No assertion/comparator/production repair, commit, retry, platform build, install, push or hardware run. This is an append-only workflow record. Full report: `/Users/karlwatson/ScratchLab-Local-Evidence/2026-09-29/reference-tear-failure-context/REPORT.md`. Next prerequisite: prove sandboxed test-host temporary-file routing under the required root before an authorized bounded continuation; do not silently relax storage or rerun the full gate.
+
+
+## 2026-09-29 — Sandbox routing established; ReferenceTear byte mismatch REPRODUCED
+
+HEAD unchanged `1e6947255d0ac25a666f6fadfc9318792dabb0a2`. One tiny external-write probe executed in Configuration2: sandbox DENIED (NSCocoaError513 / POSIX EPERM1). Runtime TMPDIR, NSTemporaryDirectory and FileManager.temporaryDirectory agree on the native-test container Data/tmp. Supplied launcher TMPDIR does not determine the sandboxed host environment. Production temp/persistence paths and entitlements unchanged. Adopted the explicitly authorized fallback: sandbox-owned ephemeral test data, outside iCloud, with per-invocation baseline/inode/hash ownership manifests, existing supervisor containment, 2GiB/3600s bounds, and exact cleanup after child reaping. Five cleanup ownership regressions passed.
+
+The previously preserved85.9MB was observed at initial inspection but its temp directory became empty before this investigation issued any deletion or launched its probe. Actor/cause unknown; do not claim our cleanup removed it. Earlier inventory/receipts preserved.
+
+Resumed ONLY Configuration2 containing-source-file scope.77tests passed,1failed,0skipped before containment. Target `ReferenceTearEvidencePipelineTests/testPhysicalRightPlatterForwardPushRisesInLiveAndFinalizedNotation` reproduced byte inequality. LIVE SHA256 `5f023e60d8edbb2d541f8d79c7c1078ed881d1c3a9ef9c4efb4f711247614d4a`; FINALIZED SHA256 `f0319ad5dd7e3f57a3d2e53439d6891eeb64001c4d37cdb3a74a2bb2500a34a6`. Each30,182bytes, validUTF-8JSON,201events. First raw difference offset1031: `$[7]` first key channel versus value.194objects have differing key order,832contiguous unequal-byte regions, final region[30133,30180). Exact recursive semantic differences0, scalar-lexeme differences0, array order preserved, actual typed equalitytrue. Classification: NONCANONICAL REPRESENTATION ONLY. The heap/hash/encoder mechanism that triggers within-process ordering variation remains unproven; no application data divergence found.
+
+Stopped expansion. Historical-prefix and broad contexts NOT RUN. Supervisor interrupted after actual target failure: INFRASTRUCTURE ERROR70, child reaped, zero survivors. Exact post-failure cleanup removed643,581bytes; zero newly owned entries remain, baseline files preserved. Temporary operand/probe instrumentation removed exactly; verification checkout clean. No production or assertion repair, comparator change, commit, push, full/platform gate, install or hardware run. Reports/payloads/cleanup receipts under `/Users/karlwatson/ScratchLab-Local-Evidence/2026-09-29/sandbox-temp-routing`. STOP for comparator decision using captured evidence; do not infer authorization to edit the test from this investigation.
+
+
+## 2026-09-29 — ReferenceTear comparator committed; Downloads preflight HARD STOP
+
+Authorized test-only repair committed as `e5590e9466ac36c46ccddb87ad8233a9250ffe52`, directly on `1e6947255d0ac25a666f6fadfc9318792dabb0a2`. Captured JSON inequality was solely object-member ordering; this local assertion has no canonical byte/hash contract. Actual RawMixerMIDIEvent equality plus strict present/null/known-field guards replaces only the raw-byte assertion. Six new regressions; production edits0, instrumentation0. Existing direction/geometry and artifact-byte/hash checks retained.
+
+Exact target:2/2PASS,0fail,0skip. Focused15selectors:272methods/544executions,544PASS,0fail,0skip; every expected method once in both configurations. One earlier helper compile error (Substring/String) was corrected before those passes; zero tests executed in that failed build. New commit includes only ReferenceAuthoringViewModelTests.swift. No push/amend/rebase; unrelated dirty work preserved.
+
+Clean detached local verifier at new SHA. Bounded120s Downloads preflight entered testPythonBytecodeCachesAreIgnoredAndUntracked but completed0tests: PROCESS TIMEOUT / HANG; INFRASTRUCTURE ERROR70, childreaped,0survivors. TCC log contains no prompt/denial evidence; cause UNPROVEN. STOP, no retry. Full scripts/build.sh all invocation count0 at new SHA. Full native/Python gate, all platform legs, final post-gate audit, install, smoke, real-device integration and hardware acceptance NOT RUN.
+
+All new evidence outside iCloud: `/Users/karlwatson/ScratchLab-Local-Evidence/2026-09-29/reference-tear-semantic-repair`. Exact/focused/preflight cleanup each leaves0ownedentries; preflight temp is empty. Historical evidence untouched. Previous85.9MB disappearance remains unexplained, with no new investigation or deletion claim.
+
+FINAL STATUS: TEST REPAIR VERIFIED AND COMMITTED — FINAL SOFTWARE VERIFICATION BLOCKED BY PREFLIGHT TIMEOUT. Next: separately authorize bounded preflight-timeout investigation; do not assume TCC cause or restart verification. Full report: `/Users/karlwatson/ScratchLab-Local-Evidence/2026-09-29/reference-tear-semantic-repair/REPORT.md`. This is a deliberate uncommitted append-only workflow note; it does not alter the committed candidate.
+
+
+## 2026-09-29 — Bounded preflight investigation: retained identity restored, verification IN PROGRESS
+
+At e5590e9 the timed-out host was e6742b7e3fb3, not the previously permitted2db3ca3aef71. Retained logs prove test entry7.895s after supervisor start and a synchronous sandboxd Downloads authorization request immediately afterward; .git resolves into Downloads. No original live stack sample exists, so exact host-thread call stack is unavailable. Signed bundle identifiers differ while Apple development certificate/team remain the same. One authorized diagnostic used a byte/signature-verified local copy of original2db3ca3aef71 products, test-without-building:2/2PASS, supervisorPASS,reaped,0survivors,0ownedtemporaryentries. No permissions altered; historical products/evidence untouched.
+
+Minimal infrastructure repair committed as dbfb0ef57cf04537553149eafc0fac95c3c7d5bb, parent e5590e9466ac36c46ccddb87ad8233a9250ffe52: explicit retained nativegate identity support, prepared-context actual-receipt identity validation, and gate reuse of that identity. Three script files only;10preflight+25supervisor regressionsPASS. No production or ReferenceTear changes, no push. Clean local verifier at new SHA.
+
+Current action: supervised900s build-for-testing in `/Users/karlwatson/ScratchLab-Local-Evidence/2026-09-29/preflight-timeout-investigation/native-cache`, separate from the120saccess preflight. This is preparation,0testexecutions. After PASS and signature check, ONE candidate access confirmation with test-without-building; ifPASS automaticallyONEscripts/build.sh all. Stop on failed/timeout confirmation or any fullgatefailure; no retry. New evidence `/Users/karlwatson/ScratchLab-Local-Evidence/2026-09-29/preflight-timeout-investigation`. Install/smoke/integration/hardwareNOTRUN. Do not claim completion from this checkpoint.
+
+
+### 2026-09-29 — Confirmed retained-host preflight PASS; SINGLE full gate ACTIVE
+
+Candidate dbfb0ef57cf04537553149eafc0fac95c3c7d5bb. Local candidate build-for-testingPASS; designated Apple signing requirement and entitlements exactly match retained2db3ca3aef71. ONE120sconfirmation using test-without-buildingPASS:2executions/2passed,supervisorPASS,reaped,0survivors,0ownedtemporaryentries. No human permission or TCC changes.
+
+ExactlyONEreal scripts/build.sh all started at this committed clean local checkout via `/Users/karlwatson/ScratchLab-Local-Evidence/2026-09-29/preflight-timeout-investigation/final-gate/run_full_gate.py`; shellPID41106, executor session25884. Default deterministic mode, retained identity from validated preflight context, no external bundle override, supervisor active. Current resultINPROGRESS. Native logs/receipt at `/Users/karlwatson/ScratchLab-Local-Evidence/2026-09-29/preflight-timeout-investigation/native-cache`; full/platform logs under `/Users/karlwatson/ScratchLab-Local-Evidence/2026-09-29/preflight-timeout-investigation/final-gate`. Never start a second invocation. Stop any required failure/timeout/infrastructure outcome without repair/retry. Only aftercompletePASS:finalaudit,non-destructivecanonicalMacinstall,softwaresmoke,thenSTOPforKarlhardware.
+
+
+### 2026-09-29 — FINAL HARD STOP: tests/builds PASS; storage ownership closure FAILED
+
+Supersedes the preceding ACTIVE checkpoint. Candidate dbfb0ef57cf04537553149eafc0fac95c3c7d5bb; exactly ONE real scripts/build.sh all completed, exit 0. Python 122/122 PASS; XCTest 9,110 PASS, 124 historical matching SKIP, 0 FAIL; Swift Testing 1,064 PASS, 0 FAIL. All 5,149 expected native methods executed once in each configuration. iOS, full macOS Release, CXLRelease and watchOS builds PASS. Native and four platform supervisors PASS, children reaped, zero survivors.
+
+The outer evidence runner exited 1 at final lease sealing: sandbox Data/tmp root device/inode changed from [16777231,137525184] to [16777231,137726288]. Both baseline and observed replacement directory are empty; replacement actor/cause UNPROVEN. Ownership guard failed before any cleanup/deletion. Do not claim the current root is owned or was cleaned by this agent. Do not weaken the guard, investigate further, retry, install or launch under the exhausted authorization.
+
+Post-gate comprehensive reconciliation audit, install, smoke, real-device integration and physical acceptance NOT RUN. No push. Three infrastructure files committed; production and ReferenceTear unchanged this turn. Original unrelated source and workflow-document prefixes preserved; clean verifier remains at candidate. All 13 inventoried timeout evidence files byte-identical.
+
+STATUS: TESTS AND PLATFORM BUILDS PASS — COMMITTED — FINALIZATION BLOCKED BY STORAGE OWNERSHIP CHECK. Next requires explicit bounded storage-root ownership investigation authorization; no blind full-gate rerun. Report and receipts: `/Users/karlwatson/ScratchLab-Local-Evidence/2026-09-29/preflight-timeout-investigation/REPORT.md`. This append-only workflow note is intentionally uncommitted and leaves the verified candidate unchanged.
+
+
+### 2026-09-29 — Storage investigation: GATE VALID; deployment stopped at signing mismatch
+
+The completed clean gate at dbfb0ef57cf04537553149eafc0fac95c3c7d5bb is accepted as authoritative; ZERO reruns. Native xcresult reread matches accounting, all five supervisors PASS/reaped/no survivors, source input hashes and clean verifier SHA intact. Prior results: Python 122 PASS; XCTest 9,110 PASS/124 unchanged SKIP/0 FAIL; Swift Testing 1,064 PASS; all four platform builds PASS.
+
+Storage: macOS cache_delete targeted the exact nativegate bundle within about 13ms of replacement birth, strongly supporting system cache cleanup. No inode-specific filesystem trace; original deletion versus relocation remains unproven. Native results finished 396.206s before replacement birth. Current empty root remains device/inode [16777231,137726288], unowned and untouched. Outcome REPLACED / NOT OWNED; no deletion or claim CLEANED/ALREADY REMOVED. Historical ownership guards unchanged, no infrastructure repair or new regressions.
+
+Final read-only reconciliation audit PASS: nine expected commits, approved manifests/58 final changed paths, required repairs, fixtures, semantic comparator, preflight, and shipping-media boundary intact. No new source changes or commit/push.
+
+NEW HARD STOP before installation: required scripts/stage_cxl_mac.py exited 0 but dropped Hardened Runtime from the successful CXLRelease build (flags=0x10000(runtime) -> flags=0x0(none)). Strict signature validity alone is insufficient. Staged output must NOT be installed/launched. No repair/retry under storage-only authority. All prior apps/data remain untouched; planned side-by-side installed destination was not created. Installation, smoke, real-device integration and physical acceptance NOT RUN.
+
+STATUS: SOFTWARE VERIFIED — COMMITTED — STORAGE CLEANUP GAP DISCLOSED; BLOCKED — INSTALLATION (staging signature mismatch). Next: authorize bounded staging-helper investigation/repair preserving verified runtime/signing/entitlement contract; no full-gate rerun solely for this. Evidence/report: `/Users/karlwatson/ScratchLab-Local-Evidence/2026-09-29/storage-root-ownership-investigation/REPORT.md`. These append-only workflow records stay uncommitted.
+
+
+### 2026-09-29 — Staging security repaired/committed/installed; launch HARD STOP
+
+Staging root cause: unconditional force/deep re-signing omitted source runtime flags and rewrote entitlements/requirements. Repaired scripts/stage_cxl_mac.py to preserve the signature byte-for-byte when no resources change, validate the full source security/content contract, and preserve source flags/entitlements/requirements for explicit outer resource re-signing without deep signing. Added scripts/test_stage_cxl_mac.py; 13/13 deterministic regressions PASS. Old invalid stage is rejected; fresh real stage PASS, all source files unchanged.
+
+Infrastructure commit 6ce9a8c510ae2ac9716328440d03d7d0dd5b27c4 on dbfb0ef57cf04537553149eafc0fac95c3c7d5bb; exactly two script paths, no production/build-input changes or push. Installed application remains the unchanged verified CXLRelease build from dbfb0ef. Full software gate remains accepted; ZERO reruns. Storage investigation not reopened.
+
+Side-by-side installation PASS: /Users/karlwatson/Applications/SL Capture verified dbfb0ef.app. All previous app bundles preserved. Post-install strict/deep codesign, flags 0x10000(runtime), exact entitlements, bundle/team/requirement, universal architectures and every bundle file match the verified source. User Documents/Application Support/preferences file metadata unchanged across install/failed launch.
+
+NEW HARD STOP: one exact-path cua.getApp launch failed with RBSRequestErrorDomain Code 5 / NSPOSIXErrorDomain Code 163, Launchd job spawn failed. No installed process remained running; no capture UI observed. Cause UNPROVEN. No retry, alternate launcher, signing/permission workaround or investigation. No recording, audio-route/MIDI changes, real-device integration or physical acceptance.
+
+STATUS: SOFTWARE VERIFIED — COMMITTED — INSTALLED — SOFTWARE SMOKE BLOCKED. Next requires bounded exact-installed-app launch-failure investigation authorization, preserving Hardened Runtime and accepted gate; no blind full-gate rerun. Report: /Users/karlwatson/ScratchLab-Local-Evidence/2026-09-29/staging-runtime-repair/REPORT.md. Hardware checklist deferred until software smoke succeeds. These workflow notes remain append-only and uncommitted.
+
+
+### 2026-09-29 — Exact installed launch refusal identified: AMFI profile authorization HARD STOP
+
+HEAD remains 6ce9a8c510ae2ac9716328440d03d7d0dd5b27c4; verified app build remains dbfb0ef57cf04537553149eafc0fac95c3c7d5bb. Read-only installed identity/signature/entitlement/flags/resource/hash audit PASS; exact source equivalence remains intact. App/executable 0755, expected owner, universal arm64/x86_64, no quarantine. No production or helper change, commit, push or full-gate rerun.
+
+Original launch time proven from system logs: 2026-09-29 18:09:24 NZDT. taskgated-helper PID49780 reports unsatisfied com.apple.developer.team-identifier and keychain-access-groups, then Disallowing. amfid PID47807 reports exact installed executable invalid, AppleMobileFileIntegrityError -413 No matching profile found. Kernel rejects attempted PID49779; launchd/RBS subsequently surface POSIX163/RBS5. Class D: launch-time signing/provisioning entitlement authorization. Exact reason the examined Mac Team Store profile did not authorize the signature remains unproven. No install-copy divergence or application runtime defect established.
+
+Gatekeeper read-only assessment says accepted with override=security disabled; this is observed pre-existing policy, NOT changed by this task and not a normal policy pass. No stale process or wrong-path registration was implicated. Security eligibility is implicated, so the environment-only correction/retry condition was NOT met. ZERO corrections, direct-executable runs or retries; no signing/entitlement/profile/TCC/Gatekeeper/driver changes. No capture UI, software smoke, real integration or hardware acceptance.
+
+STATUS: SOFTWARE VERIFIED — COMMITTED — INSTALLED — LAUNCH SECURITY ELIGIBILITY BLOCKED. Next: authorize bounded profile/signing eligibility investigation and review a concrete local-install remedy while preserving Hardened Runtime and required capabilities. No speculative entitlement stripping/re-signing, blind retry or full-gate rerun. Report: /Users/karlwatson/ScratchLab-Local-Evidence/2026-09-29/installed-launch-investigation/REPORT.md. Append-only workflow note remains uncommitted.
+
+
+### 2026-09-30 — Signing/provisioning eligibility: Store artifact used for local launch; Phase 9 STOP
+
+Bounded read-only investigation complete. CXLRelease is intentionally manual Apple Distribution plus ScratchLab CXL Mac App Store profile UUID 8b0d559b-ab10-4eed-bacd-1d02fcd391c2. Exact signing leaf 6AD444FE7E6249D2D61261E3A64B11C07CA813EA is authorized by that profile; team 2DDKGL33BU, application ID, keychain group and expiration match. No missing embedded profile or leaf mismatch found. Store profile has neither ProvisionedDevices nor ProvisionsAllDevices: it does not authorize the direct local launch attempted. This explains the retained AMFI -413 failure despite intact runtime/signature. Apple TN3125 and QA1884 document this distinction.
+
+Both restricted entitlements are explicit in ScratchLabDesktop/ScratchLabCXL.entitlements and were deliberately added by 53a4f63 for ASC submission corrections. Xcode generated entitlements and source/installed signatures agree; current staging did not inject them. 280 production/configuration files searched in canonical and verified dbfb0ef source, package/dependency inspection and undefined-symbol inspection found no production Keychain functionality. Keychain groups classified NOT REQUIRED by inspected functionality, but Store configuration is deliberate rather than proven stale/erroneous. Phase 9 conditions 2–5 are not all established: STOP before repair. No signing, entitlements, project, production, profile or application change; no build/install/launch/re-sign/full gate rerun/commit/push.
+
+Read-only deep/strict signature checks PASS for six retained comparison apps; all have Hardened Runtime. Older 79fb3ec CXL uses Developer ID/basic entitlements/no profile; TestFlight app has Apple distribution-service signature. Neither was launched. Default Debug source configuration is distinguished from the nativegate test-host bundle override and test-only entitlements. Existing full-gate acceptance remains scoped to unchanged dbfb0ef software; it is not local launch proof. Hardware NOT RUN.
+
+Next human action: authorize a concrete delivery path: local development CXL (recommended for local testing, with legitimate development profile when restricted claims remain), Developer ID plus notarization for external distribution, or TestFlight/App Store. Preserve existing Store configuration and team/bundle identity. No implicit permission to strip entitlements, select/install profiles or manually re-sign verified bytes. Source HEAD remains 6ce9a8c510ae2ac9716328440d03d7d0dd5b27c4.
+
+Report and evidence: /Users/karlwatson/ScratchLab-Local-Evidence/2026-09-30/signing-provisioning-eligibility/REPORT.md. Destination confirmed outside iCloud; historical evidence retained untouched. These four workflow notes are append-only and uncommitted; all 32 pre-existing dirty/untracked paths preserved.
+
+
+### 2026-09-30 — Local CXL Developer ID signing path: installed and launch PASS; stop for Karl
+
+Status: SOFTWARE VERIFIED — LOCAL CXL BUILD INSTALLED — HARDWARE ACCEPTANCE PENDING.
+Configuration-only commit c96b88e8224981e431d27b276473f0eba19f07a1 adds ScratchLabDesktop/CXLLocalRelease.xcconfig and scripts/test_cxl_local_signing.py. No production/project/Store entitlement edits; no push. CXLRelease remains the Store contract. Local acceptance selects the overlay on the same CXL scheme/configuration, using Developer ID, existing basic entitlements, no Store profile, no injected Store/get-task-allow entitlements and secure timestamp. Both fresh artifacts built from this exact committed SHA in the clean local verification checkout.
+
+Effective settings differ in exactly five signing-only fields. Store and local builds PASS; each bounded supervisor exited0, reaped child, zero survivors. Three configuration tests and thirteen staging tests PASS. All 492 compiled objects identical. Normalized arm64/x86_64 executable slices (only signatures/signing-size fields excluded) identical; Info.plist/resources/assets/all other bundle bytes identical. Only executable signing envelope, CodeResources seal and Store profile differ. No new native Swift/XCTest or full multi-platform gate rerun claimed; unchanged verified production code and complete payload parity retained.
+
+Developer ID Application Karl Watson (2DDKGL33BU), same com.machelpnz.scratchlab.cxl-authoring bundle, runtime0x10000, secure timestamp, exact six runtime entitlements, strict/deep signature PASS. Gatekeeper says accepted/source Developer ID but override=security disabled reflects pre-existing global policy: no normal-policy/notarization proof and no policy changed. Stage copied bytes without re-signing. Installed side-by-side at /Users/karlwatson/Applications/SL Capture local acceptance c96b88e.app; installed bytes still match build; previous recorded app bundles and Store artifacts preserved.
+
+One process launched at 2026-09-30 02:29:12 NZDT, PID59498, exact installed executable. UI automation transport disconnected after launch; read-only System Events inspection confirmed SL Capture window and CXL Reference Authoring capture UI. Same PID alive over two minutes; no retry process, no capture/action clicks. MIDI Not Connected/Twelve unavailable/AHHH waiting remain physical readiness facts, not passes. App left open for Karl.
+
+User-data metadata unchanged during install. Startup then added26 journal entries, refreshed56 audit summaries and one preferences file; zero removed files and zero captured-media metadata differences. Full metadata delta retained; no claim of byte equality for refreshed summaries. No TCC reset, driver/MIDI changes or automatic capture. Hardware NOT RUN.
+
+Evidence and operator checklist: /Users/karlwatson/ScratchLab-Local-Evidence/2026-09-30/local-cxl-acceptance/REPORT.md. Store comparison: same root/store/SL Capture.app. Local build: same root/local/SL Capture.app. All new verification output/worktree local paths checked outside iCloud; historical evidence untouched. Original32 dirty/untracked paths preserved; these four workflow notes are append-only/uncommitted. Next action is Karl's hardware checklist, not another automated launch or capture.
+
+
+### 2026-10-03 — CXL diagnostic take: audio ramp explained; right channel-fader notation gap confirmed
+
+User-selected investigation of exported take f38a3637-7dd5-4986-9ca6-99ec4aadc2ab at installed c96b88e. No production edits, commit/push, app replacement/restart or hardware action. Existing 32 dirty/untracked paths preserved.
+
+Correction to earlier audio concern: nonzero samples during crossfader-closed intervals follow the renderer's intentional 5 ms exponential gain ramp. Eleven measurable tails estimate 4.735–5.268 ms, median5.015; 60–65ms RMS below-94.6dBFS. Seven standalone checks against unchanged production DVSContinuousVinylRenderer.swift PASS, including phase continuing under mute. Not XCTest/Swift Testing/full build/hardware acceptance; latency and physical-master output remain unverified. No audio repair warranted from the nonzero-only check. Historical report/evidence untouched; new report supersedes its interpretation.
+
+Right channel-fader gap: audio multiplies rightUpfader and crossfader gains; live CXL and finalized reference derivation select crossfader evidence only. Upfader metadata does not select a different derivation. ZIP has no channel-fader messages, so not a hardware retest. Implementation NOT STARTED: pending user's choice of separate labelled control lanes (recommended, combined gate closed when either known control closes) versus one combined audible/silent lane. Carry identity, mapping/curve, held-state ownership and unknowns consistently through live, saved review and export; do not fake channel evidence as crossfader or patch only live UI. Do not alter decoder/motion geometry, audio ramps, scoring or signing.
+
+Continue from local evidence /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-03/audio-fader-investigation/REPORT.md and REPAIR_PLAN.md. No new recording required from Karl now. MOTION UNKNOWN physical cause remains unresolved; video does not show decks. All new outputs/cache/tmp are local outside iCloud. Full software gate and new installation belong to the later implemented repair, not this read-only diagnosis.
+
+
+### 2026-10-03 — Separate mixer notation lanes (authorized implementation in progress)
+
+Karl selected separate Crossfader and Right channel lanes, with platter motion muted when either observed control closes. This supersedes the earlier pending lane-choice note. Implementing take-owned, versioned control observations with exact source/connection/address, learned range/inversion/curve, original held-state timestamps, explicit invalidation and bounded storage. Motion data and audio rendering remain unchanged. Shared combined gate is used by live CXL, finalized review, persisted draft and source-bound v2 companion export; old v1 evidence remains readable. Unknown right-channel state is never assumed open or substituted with the left physical fader.
+
+Canonical HEAD remains c96b88e; no commit/push or install/restart. Existing unrelated 32 dirty/untracked paths preserved. Isolated verification checkout: /Users/karlwatson/ScratchLab-Local-Evidence/worktrees/commit0-verification-20260929. All new build/evidence roots checked local outside iCloud. Phase: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-03/separate-fader-lanes. Candidate files and preexisting patch are inventoried there. Focused-1 passed; expanded focused-2 and final full software gate are not yet accepted. See latest receipts before continuing. No physical hardware acceptance claimed; no new capture needed yet.
+
+
+Separate-lanes verification checkpoint: focused-2 is NOT a pass (new test lacked its injected draft store; three assertions failed). Fixture repaired without weakening production guards or equality checks. Focused-3 passed 32 executions; a subsequent code review added a live capture-epoch consistency guard. Final focused-4 passed 34 executions across both configurations with zero failures/skips; save/reopen/ZIP and deterministic epoch-transition tests pass. Superseded native/warm runs were contained, children reaped, no survivors. Final frozen full gate is RUNNING at local phase/full-gate-verified; inspect its receipts before claiming completion. Canonical candidate source is frozen; original unrelated work preserved. Installed app unchanged.
+
+
+Final separate-lanes checkpoint: recorder lifetime is now cleared atomically with raw MIDI on drain/abandon/arm, retaining only independent current-position observations. Admitted out-of-order fader packets are preserved and invalidate coverage. Focused-6 PASS: 40 executions, zero failures/skips, both configurations, child reaped/no survivors. Final candidate is frozen; complete gate now runs under separate-fader-lanes/final-verification. Prior partial broad runs were superseded, not passed. Inspect final-verification/exit-code.txt and native/platform receipts before marking task complete. No install/commit/push.
+
+
+Final gate stopped at ReferenceTearEvidenceCodecTests/testUnknownVersionAndTruncatedRequiredFieldsFailExplicitly: its legacy negative fixture used v2, now intentionally supported for mixer evidence. Decoder still rejected absent mixer binding. Changed only its unsupported-version fixture/expected value to v999; exact error and required-field checks preserved. Focused-7 PASS: 90 executions, zero failures/skips (25 codec + 20 feature/affected methods, both configurations). Final frozen full gate is now final-verification-2. Earlier receipts are retained and not reported as passes.
+
+
+### 2026-10-03 — Separate Crossfader / Right channel lanes: SOFTWARE VERIFIED
+
+Implemented Karl's selected two-lane notation with continuing platter motion marked muted whenever either observed control closes. Shared take-owned evidence and gate persist through live CXL, finalized review, saved draft and source-bound v2 export; v1 remains readable. Unknown controls remain unknown. Added source/connection/address/range/curve identity, held-state provenance, invalidation, bounded preview/take retention, epoch-consistent live reads, failed-start/drain cleanup and explicit out-of-order coverage failure. Audio DSP, motion geometry, signing settings and Learner scoring unchanged.
+
+Final frozen isolated `scripts/build.sh all` PASS (exit0): Python122; XCTest9,150 passed /124 skipped /0 failed; Swift Testing1,064 passed /0 failed; both configurations. iOS, full macOS Release, CXLRelease and watchOS builds PASS. Focused codec/feature gate90 executions PASS. Earlier failed/superseded runs retained and classified in the report; no tolerance or identity guard weakened. All supervised processes reaped/no survivors. Ownership-checked test-temp cleanup removed45,917,723 bytes; preexisting files preserved; no owned entries remain.
+
+Evidence/report: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-03/separate-fader-lanes/REPORT.md. Authoritative complete receipts: same phase/final-verification-2. Canonical candidate exactly matches frozen isolated verifier after separating original hunks; original32 paths preserved and workflow updates append-only. HEAD remains c96b88e8224981e431d27b276473f0eba19f07a1. No commit/push/install/restart; installed local acceptance app remains unchanged. Physical acceptance NOT RUN. Next step is an explicitly authorized local acceptance build/install, then a short new Movement Check with both controls observed, separate cuts, and both-closed/reopen-one behavior. Watch remains optional; original uploaded take has no right-channel messages and cannot establish this behavior retrospectively.
+
+
+### 2026-10-03 — Separate fader lanes installed; one combined hardware check pending
+
+Karl authorized continuing through installation/launch and minimizing operator testing. Built the exact final-verification-2 12-file candidate from isolated verifier (base c96b88e; uncommitted candidate explicitly recorded). Local Developer-ID overlay build PASS, no survivors; five signing-only effective setting differences; runtime code/data identical for both architectures. Strict signature-only byte comparison retained its failure due to fresh build-root debug paths; exhaustive functional comparison accounts for 158 AST/OSO paths per architecture and build UUID/size metadata with no unexplained functional differences. Store contract unchanged; no broad/native test rerun, production edit, commit or push.
+
+Installed /Users/karlwatson/Applications/SL Capture fader lanes 20261003.app, exact built bytes, strict/deep Developer-ID signature, runtime, timestamp and intended entitlements verified. Old installed app and Store product unchanged. User-data metadata unchanged during install; startup added27/modified59/removed0 files with zero captured-media metadata changes. One process launch PID25928 is running. CUA native UI read disconnected; CXL window content NOT VERIFIED remotely. No automatic capture, TCC/driver/MIDI reset, or UI fallback action.
+
+Next: ONE approximately30-second Movement Check, no beat/Watch required: establish both faders open, scratch right platter, cut crossfader alone, right vertical fader alone, then both closed/reopen one (still muted)/both open. Stop/save/reopen/export one ZIP and report audible/lane agreement. Hardware NOT RUN. Report and receipts: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-03/separate-fader-lanes-local-acceptance/REPORT.md. All new evidence remains outside iCloud. Preserve historical evidence and original dirty work.
+
+
+### 2026-10-03 — Rane separate-fader physical take inspected; startup-state gap remains
+
+Karl supplied D7500C40 ZIP, session9b6d2d0b-aae1-41e6-b0c1-cfb0521c5ecc/take-001,26.103061s Movement Check/no beat/no Watch. Operator confirms both audible cuts/live lanes and both-closed/reopen-one behaviour worked. Independent evidence:804 crossfader messages/10 closures,306 right-channel messages/14 closures,19,093 platter messages. All1,110 mixer observations match raw MIDI;83 canonical records' mute spans match source controls. Seventeen longer closure interiors after60ms settling have worst RMS−97.20dBFS. ZIP/artifact/source hashes PASS; bound original sidecar byte-exact to disk; actual saved draft's projection/review/source/mixer evidence exactly equals ZIP, including media hashes. UI reopen not observed. Both-closed overlap is absent in this recording, so that case remains operator-confirmed only.
+
+Full acceptance remains incomplete: new lanes have NO held-at-start entries. Crossfader becomes known9.889486s; right channel16.624495s; combined unknown14.971613s total. Recording arm reconnects same endpoint but unconditionally loadDeviceMappingForCurrentSource resets mixer factors and pushResolvedCurve invalidates cached mixer observations. Legacy crossfader snapshot retains original−10.519847s observation. Bounded next repair: distinguish unchanged recording-arm reconnect from actual source/mapping/curve change; preserve real held state and corresponding software factor only for proven unchanged identity; retain invalidation otherwise. Do not invent positions for this historical take. No further capture needed to diagnose this path.
+
+No production/test edits, build, install/restart, app UI actions, commit or push during inspection. Original evidence preserved. New local report/scripts/plot: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-03/fader-lanes-hardware-D7500C40/REPORT.md. Workflow notes append-only. Fader-cut operator/recorded checks pass; startup-state repair remains open; no canonical-reference approval/training or complete hardware acceptance claimed.
+
+
+### 2026-10-03 — Recording-start fader retention repair IN PROGRESS
+
+Karl authorized continuing fixes without stopping until operator input is needed. Selected bounded follow-up to D7500C40: capture arm and successful finalization now call reconnectSelectedMIDIInput(reuseCurrentConnection:true). Exact selected source ID/endpoint, nonzero device-session generation and successful-connection readiness must all match; otherwise original reconnect/mapping-reset path remains. Port close and identity/generation retirement revoke readiness. A pending/failed connect cannot authorize reuse. Normal capture boundaries leave port, current gains and true observed positions intact; no raw MIDI or historical evidence is backfilled. Explicit refresh/source/mapping/curve changes retain their resets.
+
+Only incremental source files: ScratchLabDesktop/Services/MacCaptureEngine.swift and ScratchLabDesktopTests/MIDIUserMixerGainTests.swift. Added four deterministic native tests covering preserved original held timestamps/gain across consecutive takes, missing/changed/unready endpoints, explicit reconnect invalidation, and no invented right-channel position. DEBUG hook intercepts only CoreMIDI effects after the production decision. Focused124 executions PASS, zero failures/skips, both test configurations; supervisor exit0/reaped/no survivors. Canonical/verifier incremental changes match exactly; unrelated dirty/untracked hashes preserved; HEAD c96b88e unchanged; no commit/push.
+
+Full gate now RUNNING: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-03/recording-arm-fader-state/run_full.py (exec session43616). Inspect full-gate/exit-code.txt and native-cache/receipt.json, then platform receipts in phase root. Do not claim full pass yet. Current source is frozen. All new paths verified outside iCloud; tests use existing explicitly isolated nativegate identity and ownership lifecycle. Prior evidence untouched. Installed/running app remains SL Capture fader lanes 20261003.app PID25928, unchanged. After gates: local Developer-ID build/signature/payload checks, side-by-side install; do not terminate a potentially active capture to launch it. Hardware/startup acceptance remains pending; previous individual fader cuts are already accepted.
+
+
+### 2026-10-03 — Recording-start fader reset repaired; software verified and signed app installed
+
+Root cause: normal capture arm and successful finalization reconnected the unchanged MIDI endpoint, reloaded mappings, reset actual mixer gains and invalidated held mixer observations. MacCaptureEngine now reuses only a successfully connected, identical selected source/endpoint with nonzero device-session generation. Close/identity/generation retirement revoke readiness; explicit reconnect/reset behavior remains. No audio DSP, platter decoder, schema, Store signing, historical-evidence or scoring change. Missing control observations stay unknown.
+
+Incremental files: ScratchLabDesktop/Services/MacCaptureEngine.swift and ScratchLabDesktopTests/MIDIUserMixerGainTests.swift. Four new deterministic tests cover two consecutive takes, original held timestamps and actual gains, missing/changed/unready identity, explicit rebind invalidation and no invented channel value. Focused124 executions PASS. Frozen isolated scripts/build.sh all PASS: XCTest9,158 passed /124 skipped /0 failed; Swift Testing1,064 passed; Python122 passed; iOS/full macOS Release/CXLRelease/watchOS builds PASS. All supervisors reaped children/no survivors. Owned sandbox-temp cleanup removed45,917,723 bytes, preserving baseline entries.
+
+Existing Developer-ID overlay build PASS; five expected signing-only differences; all runtime code/data/resources match Store candidate. Exhaustive executable comparison accounts only for signing/build UUID/158 exact AST/OSO debug-root path substitutions per architecture and associated metadata. Strict/deep signature/runtime/timestamp/entitlements verified. Gatekeeper assessment accepted with preexisting security-disabled override; policy unchanged, no notarization claim.
+
+Installed side-by-side /Users/karlwatson/Applications/SL Capture fader start 20261003.app; exact built bytes. Prior local apps and both Store artifacts preserved. User-data metadata unchanged during install. Old fader-lanes app PID25928 remains running; new app launch NOT RUN because idle capture state is not remotely observable after native UI inspector failures. No automatic quit/capture, commit or push. HEAD c96b88e8224981e431d27b276473f0eba19f07a1 unchanged; unrelated dirty work preserved; canonical and verifier incremental edits identical. This completion supersedes the in-progress startup-repair entry.
+
+NEEDS KARL: save/quit current app and open new installed app. ONE approximately15-second Movement Check, no beat or Watch: observe/move both faders, park both closed before Record; move right platter without touching faders; open crossfader only (still muted), then right channel (audio returns); stop/save/export one ZIP. Both lanes should be known from start and platter motion should remain shown while muted. Prior independent cuts are already accepted; do not repeat their full sequence. Physical startup acceptance remains NOT RUN. MOTION UNKNOWN-before-AHH/calibration remain separate unresolved observations.
+
+Report/receipts: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-03/recording-arm-fader-state/REPORT.md. New app details: same phase/local-acceptance/install-receipt.json and launch-status.json. No further broad test rerun unless source changes or a failure justifies it. All new evidence local outside iCloud; historical evidence untouched.
+
+
 ### 2026-10-03 — Verified fader checkpoint (commit/push authorized)
 
 Karl requested a checkpoint, commit and push. Source commit 876f70f43cd963fa46190e470dd846543bbfb883
@@ -1294,6 +1872,17 @@ Commit/publication receipts: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10
 All new checkpoint artifacts are outside iCloud; canonical checkout remains
 at its original path. Read publication-result.json for the final remote SHA
 rather than inferring remote success from this pre-push checkpoint entry.
+
+
+### 2026-10-03 — Startup physical acceptance PASS; stale fader-warning repair in progress
+
+A7F4D464 ZIP plus operator confirmation accepts the startup/fader fix: both genuine held observations survive from about39s before Record, both controls and combined gate have zero unknown duration, output stays muted until right channel opens11.526655s into take. All868 in-take mixer messages match raw MIDI; all55 canonical motion gate spans agree. Saved draft/source-bound companion/source sidecar/media hashes match exactly. Report: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-03/fader-start-hardware-A7F4D464/REPORT.md. No further physical fader retest needed. Running app confirmed at SL Capture fader start 20261003.app PID33876.
+
+Screenshot grey motion gaps are3.645674–3.769341s and9.981029–11.474561s, backed by retained discarded/insufficient/gap movement evidence. Asked Karl whether he paused/slowed in the middle; reply still pending. Do not infer continuous motion, invent holds, or weaken decoder thresholds. Generic notation has one one-ULP fader toValue serialization difference; exact raw/mixer/canonical evidence is preserved and the discrepancy is recorded rather than silently tolerated.
+
+Bounded new repair selected: stale faderUnobserved projection copy survived applying complete mixer evidence. ReferenceTake.swift now derives fader-specific reasons from actual mixer coverage and updated mute spans. Its presentationReasons getter corrects old saved take display without mutating historical snapshots. ReferenceAuthoringView uses that getter; four new SeparateMixerFaderEvidenceTests cover full/partial/expired/overflowed evidence, right-channel-only mute, unchanged geometry, legacy behavior and immutable JSON roundtrip. Only these three production/test files change; no capture/audio/motion/Store-contract change. Canonical/verifier bytes match; unrelated work preserved.
+
+Focused verification RUNNING: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-03/fader-review-warning/run_focused.py, exec session10145. Expected132 named executions if all pass. Then required full scripts/build.sh all using this phase's run_full.py; expected9166 XCTest passes plus124 skips,1064 Swift Testing,122 Python if all pass. Check actual receipts; do not claim a gate pass yet. All new paths verified local outside iCloud; existing evidence untouched. Canonical HEAD remains9821387 on codex/cxl-fader-checkpoint-20261003, already pushed; isolated verifier remains c96b88e plus frozen candidate. Keep source frozen during verification. After passes: signed local build/parity/install, then selective authorized commit/push with checkpoint. Do not restart a potentially active capture. No new hardware take needed solely for this warning correction.
 
 
 ### 2026-10-03 — Startup accepted; fader review warnings repaired and verified
@@ -1365,6 +1954,51 @@ publication-result.json for the final independently verified remote SHA.
 - [x] Build, sign, compare and install the corrected local CXL app side-by-side.
 - [ ] Open the new app when convenient; launch/visual acceptance remains NOT RUN.
 - [ ] Clarify continuous movement versus pause in the grey motion interval.
+
+
+### 2026-10-03 — Dense muted trace rendering repair in progress
+
+Karl reports the platter trace remains bright with either fader closed. The pixel regression reproduced a renderer defect: intended 0.45 opacity became 0.996078 with 4096 independent short round-capped segments, versus 0.450980 for a single segment. Prior state/style tests did not verify composited pixels. Audio and recorded two-control gate acceptance remain valid; do not repeat the hardware take merely to reproduce this display issue.
+
+Selected bounded task: batch canonical drawing operations in shared ScratchMotionRenderer, retaining all vertices and pen-up across exact time/position discontinuities. Legacy strokes remain independent. Only ScratchLab/Models/ScratchMotionRenderer.swift and ScratchLabDesktopTests/ScratchNotationPanelTests.swift change. No decoder/audio/capture/export/schema/signing or historical evidence edits. Canonical HEAD3733123 and clean verifier baseline match; current two-file candidate is identical in both checkouts. All new evidence is under /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-03/muted-trace-rendering; destinations checked local outside iCloud.
+
+Expected diagnostic failure is retained in reproduction/. First focused corrected-renderer run passed raster/combined-gate cases but the new geometry test compared Path-converted Float coordinates with model Doubles. Revised assertion compares exact original independent Path endpoints with batched Path endpoints (no tolerance or geometry weakening); failed receipt retained in focused/. Corrected focused run is active via run_focused_2.py, exec session52589. Require PASS before run_full.py. Full gate expected9174 XCTest passes/124 skips,1064 Swift Testing,122 Python and four platform builds; verify actual receipts. Source remains frozen during tests.
+
+After gates: verify hashes, selective source commit, align clean verifier to commit, existing local Developer-ID overlay build, strict functional payload comparison, side-by-side SL Capture muted trace 20261003.app install, append final checkpoint entries and push codex/cxl-fader-checkpoint-20261003. Preserve current running app and unrelated dirty/untracked work. Commit/push/install authorization persists. Final operator action should be app switch and one visual check using the existing take, not another hardware recording.
+
+
+### Dense muted trace continuation — focused98 PASS, full gate active
+
+Focused corrected run finished PASS (98 named executions, zero failed/skipped, two configurations), receipt focused-2/receipt.json. Both diagnostic/test failures are preserved under reproduction/ and focused/. Actual before/after ImageRenderer attachments were exported to pixel-before/ and pixel-after/ and visually inspected: old dense trace nearly opaque/solid; corrected dense trace dim/dashed. Production source remains frozen in candidate-hashes.json and candidate.patch; only renderer and ScratchNotationPanelTests change.
+
+Full scripts/build.sh all is running via run_full.py, exec session9286. Repository preflight PASS. Verify full-verification-summary.json only after session completion by running verify_full_receipts.py; expected9174 XCTest passes/124 skips,1064 Swift Testing,122 Python, four platform builds. No full pass yet.
+
+Prepared but NOT executed downstream scripts: commit_candidate.py (two-file selective commit and verifier alignment), local-acceptance/prepare_candidate.py, run_acceptance_build.py, compare_payload.py then compare_functional_payload.py, install_candidate.py, finalize_checkpoint.py, publish_checkpoint.py. All guard full receipts/source hashes; keep runtime TMPDIR local. New installed path will be /Users/karlwatson/Applications/SL Capture muted trace 20261003.app, prior app baseline fader review. Canonical/verifier baseline3733123, publication branch codex/cxl-fader-checkpoint-20261003. Final checkpoint template already prepared; edit it if actual outcomes differ. Do not mutate production source while gate is running. No extra hardware take is needed; after install, preserve running app and hand Karl app-switch/existing-take visual check only.
+
+
+### Dense muted trace correction — three-file candidate, verification restart
+
+The first full gate STOPPED: Swift Testing ScratchMotionRendererTests.holdsRenderNoCentreSpine required the old per-segment loop spelling. No platform build, source commit, install or push followed the failure. first-full-failure.json and full-gate/ preserve the cause and containment; native exit70 followed the deliberate stop, not an unexplained infrastructure failure.
+
+The renderer and its four new pixel/geometry tests are unchanged from focused98 PASS. The third scoped file is ScratchLabDesktopTests/DemoTimingFoundationTests.swift: the old source-wiring assertion now expects strokeRuns and additionally proves legacy padding yields no path while canonical open/closed/unknown holds retain exact flat paths. No assertion tolerance or evidence policy was weakened.
+
+All three candidate files match canonical/verifier and are frozen in candidate-hashes.json. Reverification is under verification-2/ with separate local output/cache roots. Focused selectors include the four previously passing suites plus ScratchMotionRendererTests. Only after focused PASS run verification-2/run_full.py, then its verify_full_receipts.py. Do not interpret the prior two-file focused receipt as a pass for the current candidate.
+
+Continue the existing authorized selective source commit, local Developer-ID build/parity/install, checkpoint and normal branch push only after the full gate passes. Prepared downstream scripts must use verification-2/platform-cache for this Store product and include the third test file in the final checkpoint text. Preserve current running app. No new hardware take is required for the renderer correction.
+
+
+### Corrected focused gate PASS; full gate verification-2 active
+
+Current three-file candidate focused verification PASS:98 XCTest executions and14 Swift Testing executions, zero failed/skipped; updated hold-path test ran twice. Frozen candidate bytes match both canonical and verifier. See focused-summary.json and verification-2/focused/receipt.json. The summary parser was corrected to accept singular suite in Swift Testing output; actual named executions were independently checked.
+
+verification-2/run_full.py is running in exec session10855. Do not start another gate or change source while active. All new output is under verification-2; the first full failure remains untouched. Require its full-verification-summary.json and all process receipts before source commit/build/install/push. Prepared local-acceptance scripts now point to verification-2/platform-cache; checkpoint text includes the third test file and preserved full-gate failure. NEXT_CHAT_PROMPTS.md contains the fresh-chat continuation prompts requested by Karl. Do not start concurrent old/new chats against this checkout.
+
+
+### Corrected full gate PASS — ready for selective commit and local signed build
+
+verification-2 full gate completed PASS:9,174 XCTest passed/124 skipped/zero failed;1,064 Swift Testing;122 Python. iOS, full macOS Release, CXLRelease and watchOS builds all PASS. All four new pixel/geometry regressions and the repaired legacy/canonical hold contract ran twice. All child processes reaped with zero survivors. Candidate hashes unchanged, unrelated canonical working bytes and path inventory unchanged. See full-verification-summary.json (receiptRoot verification-2). Earlier failure artifacts remain untouched.
+
+Next authorized steps: commit the frozen three-file candidate using commit_candidate.py; build the exact clean commit with the existing local Developer-ID overlay, compare functional payload, install side-by-side, write selective workflow checkpoint, and normal push to codex/cxl-fader-checkpoint-20261003. Keep the current capture app running until Karl saves/quits it. Visual acceptance in the new app remains NOT RUN.
 
 ### 2026-10-03 — Dense muted trace rendering repaired and verified
 
@@ -1492,6 +2126,29 @@ entries remain historical; this checkpoint supersedes the renderer visual item.
 - [x] Audit both existing motion gaps without changing decoder policy.
 - [ ] Obtain take-specific physical context for both motion intervals if Karl can recall it.
 
+### 2026-10-04 — Generic SL Capture for three professional DJs (verification in progress)
+
+User explicitly requested removal of performer-specific CXL branding and a generic
+SL Capture handoff for three professional DJs. Selected bounded task supersedes
+unrelated unchecked backlog. Canonical source remains at 05ad7b0 with its original
+dirty work preserved. Exact new hunks are applied to the existing clean verifier
+at 35bc27f; no unrelated dirty production/inspection work enters the deliverable.
+
+Visible authoring, review, validation and companion waiting wording is generic.
+New Setup requires the actual DJ/performer name; no fabricated default performer.
+The shared session locks it with the recording setup and carries it to finalized
+reference metadata; the bridge forwards it to raw recording configuration.
+New scratch allows the next DJ; previous take attribution remains untouched.
+Bundle IDs, schemas, saved paths, export keys, signing settings, original media,
+existing operator acceptance and actual historical performer names are retained.
+
+Focused session/bridge/view-model checks PASS: 322 named XCTest executions,
+including blank-performer rejection and three-DJ attribution/serialization.
+Required scripts/build.sh all is in progress. Do not package as verified before
+that gate and the subsequent local Developer-ID build finish successfully.
+Evidence: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-04/generic-capture.
+No commit, push, app install, hardware recording or Learner edit.
+
 ## Completed — Save Capture notation PNG, 4 October 2026
 
 User authorized checkpoint/commit/push after implementation. Save Capture now adds derived PNG references from the stored canonical projection, preserving independent fader cuts and unknown gaps. Existing drafts can be saved again without recording. 9188 XCTest executions passed, 124 skipped, zero failures; 1064 Swift Testing and 123 Python tests passed. iOS, macOS Release, macOS CXLRelease and watchOS builds passed. Updated signed universal ZIP: /Users/karlwatson/Downloads/SL-Capture-Pro-DJ-PNG-2026-10-04.zip. See docs/checkpoints/2026-10-04-capture-png.md and /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-04/capture-notation-png. No app install, operator PNG/new-rig acceptance or decoder/audio changes. Existing accepted hardware evidence retained. Only verified generic performer and PNG source slices are checkpointed; unrelated dirty work is preserved.
@@ -1526,3 +2183,139 @@ build, payload equivalence, staging and ZIP round-trip verified. No install or
 new hardware/operator acceptance. Distribution: /Users/karlwatson/Downloads/SL-Capture-Pro-DJ-PNG-2026-10-05.zip.
 Existing drafts can re-export; new DJ rigs need their own short capture check.
 Full files, receipts and limits: docs/checkpoints/2026-10-05-png-layout.md.
+
+
+## 2026-10-05 — Phase HID + S9 audit: shared HID access blocked
+
+User-selected route audit, no production implementation yet. With Serato closed,
+Phase VID241/PID497 shared IOHID open succeeded but returned no input reports in
+three seconds. After operator reported Phase/Serato/S9 playing and Serato PID70278
+was present, the same registry4295562066 returned kIOReturnExclusiveAccess
+(-536870203 / 0xe00002c5) on shared open. No device seizure, output/feature
+commands, process shutdown, routing, signing or decoder changes. This proves
+only this shared access path is blocked in the current setup, not every possible
+HID integration. Prior external-sniffer candidate fields remain uncalibrated.
+
+Existing app route is Phase RCA DVS through DJM-S9, not direct HID. Pending
+operator wiring answer: Phase RCA outputs connected to S9 LINE, or USB/WIR only?
+Check the answer before proposing DVS input/program-audio routing; no guessed
+channel numbers or physical acceptance. Do not repeat a calibration take until
+raw streaming is established. Canonical unrelated dirty work preserved.
+Evidence and exact receipts: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-05/phase-hid-s9-audit/REPORT.md.
+Build/tests NOT RUN for this source/hardware audit; no production source edits.
+
+Operator follow-up: USB/WIR only; no Phase-to-S9 RCA connection. The existing DVS path therefore has no confirmed control-tone feed. Serato playback is reported working; simultaneous direct HID capture remains blocked at shared open. Do not mark the requested HID route complete or substitute DVS without explaining the change.
+
+
+## Retest after operator enabled Serato audio sharing
+
+Operator requested a fresh check after enabling Serato sharing audio to other apps. Serato PID70278 and the existing SL Capture PID69585 remain running. The unchanged input-only Phase probe returned the same kIOReturnExclusiveAccess (-536870203 / 0xe00002c5) for registry4295562066, with zero reports because shared open failed. Receipt: shared-input-probe-serato-audio-sharing.json. This setting change did not unblock this direct shared HID path. Audio sharing itself was not tested and no claim is made about captured program audio. No app/device configuration, process, production source or signing changes.
+
+
+## 2026-10-05 — Correction: packaged Phase DVS motion path is not established
+
+Further source/build-receipt audit contradicts the earlier suggestion that RCA wiring alone enables complete capture in the distributed app. The Phase DVS + DJM-S9 selector selects audio/MIDI devices only. TimecodeCMSampleBufferAdapter is guarded by DEBUG && ENABLE_TIMECODE_LIVE_TAP; MacCaptureEngine live DVS ingress is ENABLE_TIMECODE_LIVE_TAP-gated. The actual PNG package local-release/local-settings.json and store-settings.json both show SWIFT_ACTIVE_COMPILATION_CONDITIONS = CXL_AUTHORING only. ReferenceAuthoringCaptureBridge platter preflight uses controller MIDI (or Twelve); no direct Phase HID ingress exists. Therefore do not present the current package as a working Phase platter-notation/export route. Existing docs/phase_djm_s9_capture.md overstate support and require reconciliation as part of the requested route work.
+
+Hardware DVS wiring is valid Phase receiver RCA to S9 LINE, S9 USB to Mac, Serato REL for playback (official Phase setup guide checked). This does not prove SL Capture DVS admission, timeline/export, channel pairs or physical acceptance. Next implementation scope must audit and complete a production DVS evidence route with independent program audio and S9 fader input, or establish a feasible shared HID integration. Do not just enable diagnostic flags or infer motion from shared Serato audio. No production edits or new build/test claims in this audit.
+
+
+## 2026-10-05 — Phase B / S9 RCA playback reported working; shared audio input PASS
+
+User reports Serato playing Phase via RCA/S9; accept Serato playback only. User
+screenshot confirms CDJs/CD-LINE and audio sharing enabled. Shared input-only S9
+probe successfully read8channels at48kHz beside Serato:144384frames/282callbacks,
+no observed sample-time discontinuities, malformed/overflow/nonfinite samples.
+Sample was essentially quiet; tone/program pair identity remains unverified.
+No platter direction, calibration, SL Capture capture/export or raw losslessness
+acceptance. Existing HID exclusive-access result remains scoped to shared HID.
+
+Production audit found DEBUG-only DVS ingress/notation finalization, diagnostic
+UI-owned decoder lifetime, authoring MIDI-only motion provenance and endpoint
+conversion; enabling flags alone cannot complete a truthful production route.
+No production implementation made. Scoped plan and evidence:
+/Users/karlwatson/ScratchLab-Local-Evidence/2026-10-05/phase-s9-dvs-route/REPORT.md.
+
+A local explicit Start/Stop diagnostic panel is ready at http://127.0.0.1:50419/
+(Codex browser tab1; Python server session31911). It records only exact selected
+S9 eight-channel input; no audio output/property change. Three operator markers
+cover forward/back with both faders open, channel closed, crossfader cut. Raw
+PCM/timing/markers saved to operator-UUID under evidence root, capped55seconds.
+Initially idle; inspect for a completed capture before asking again. Manual
+stop/cleanup self-check passed; no full app build/test or physical motion pass.
+Wait for the one combined diagnostic, inspect actual channels then finalize
+implementation scope. Preserve unrelated dirty work, playback and existing apps.
+
+
+## 2026-10-05 — Two Phase/S9 diagnostic recordings saved and analysed
+
+Do not ask to repeat the routing take: operator-c4479659b811 (39.381333s) and
+operator-bce943036f80 (29.589333s) are saved under phase-s9-dvs-route. Exact
+8channel48kHz input capture/stop successful, no observed callback sample-time
+gaps or nonfinite/overflow/malformed data. USB3/4 shows stereo quadrature;
+USB5/6 is a separate audio signal and is exactly silent through first take's
+channel-closed marker interval while3/4 remains active. Crossfader-cut markers
+lack enough active control signal for independent crossfader acceptance.
+Button markers do not prove physical fader states, polarity, scale or holds.
+
+Unchanged Swift decoder replay succeeded on both captures (1355/1242 decoded
+frames respectively); confidence/silence rejections retained. No downstream
+trust/normalization/canonical acceptance or regression gate claimed. Source
+projector still rejects non-controller coordinates; production route remains
+unimplemented. Only local analysis/raw-preserving WAV derivatives and workflow
+records changed. No production build, install, signing, commit or push.
+Read /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-05/phase-s9-dvs-route/OPERATOR_ANALYSIS.md
+and routing-analysis.json/offline-decoder.json per take before further work.
+Use saved inputs for engineering; physical calibration/crossfader verification
+belongs to the finished candidate's combined acceptance. No teaching data claim.
+
+
+## 11 October 2026 — second Intel sample, repair in progress
+
+User confirms the first CPU package still lags and the GUI jumps. Sample 2 matches candidate x86_64 UUID C79A0E45-88DF-3B27-A3C4-B39DD3F910BA. First package Intel responsiveness FAIL; physical capture integrity remains unconfirmed. Main-thread sample still shows SwiftUI layout and canonicalGeometry; notation worker has 44 sampled observations versus 1557 main-thread observations (not CPU percentages). Code also moves checks between a satisfied two-column grid and warning rows as status changes, changing scroll content height.
+
+Round 2: immutable lossless geometry plus mixer lanes prepared by the existing worker; chart consumes prepared values. Full authoring form observes a bounded 5 Hz stream, while camera, waveform, notation and recording-stop/window-release events retain direct updates. Preflight cells stay in source order, with adaptive columns; live evidence messages have a bounded scroll region. Deduplicate identical view-model state. No raw capture/hand-tracking cadence, decoder, schema or export changes. New focused regressions and full gate pending. Baseline all 752 files plus sample retained at /private/tmp/sl-capture-cpu-round2-20261011. No production install or launch, commit or push.
+
+
+### Round 2 verification checkpoint
+
+Canonical branch codex/cxl-fader-checkpoint-20261003 at 5e59ca85e70a2a0ecb78224ed72e83a5fd4c6294. Exact frozen 752-file snapshot at /private/tmp/sl-capture-cpu-round2-20261011/verification. Full unchanged scripts/build.sh all ACTIVE, exec session 65924, driver full-driver-2.log, PID at launch 14821. Do not duplicate or edit frozen verifier. Warm build PASS after correcting the new shared chart source's exhaustive accessibility switch (failed-build-1 preserved). The optional focused selector mistakenly duplicated the target prefix and executed zero tests; classified NO COVERAGE, not a regression pass. Full unfiltered gate must execute each new named regression twice. Python 123 PASS. Native suite running; no failures so far.
+
+New tests: testFormRefreshCoalescesBurstAndDeliversLatestValueOnMain, testLiveFormKeepsStatusCellsAndDrawingPreparationStable, testPreparedChartPreservesDenseMotionGapsWrapsAndSeparateMixerLanes. Existing atomic main-thread publication test now verifies matching prepared geometry. Recording-stop notifications bypass throttling and deliver asynchronously after Published mutation. Shared accessibility handles prepared canonical source. Eight source/test files changed plus task records; all 740 other baseline files hash-match. Existing capture engine, raw evidence, resources, export and signing configuration untouched.
+
+Local release driver, exhaustive functional/signing comparison and guarded package script prepared below the round2 root, NOT RUN. Intended package Downloads/SL-Capture-Intel-UI-Fix-2-2026-10-11.zip. Do not claim Intel PASS: first candidate responsiveness FAIL, second candidate not tested on Intel yet. Supplied sample confirms first candidate UUID. Active user text clarification asks what GUI part jumps; no reply received; stable preflight regrouping defect found directly in code.
+
+
+## 11 October 2026 — Intel UI Fix 2 SOFTWARE/PACKAGE VERIFIED
+
+The first package still lagged and its GUI jumped on the user's Intel Mac (Sample 2 confirmed UUID C79A0E45-88DF-3B27-A3C4-B39DD3F910BA). That first candidate's responsiveness is FAIL. Round 2 addresses the remaining sampled main-thread drawing geometry and the code-proven preflight regrouping/layout defect; exact operator identification of which GUI element jumped was not supplied.
+
+Six implementation files changed: ScratchStrokeGeometry.swift, ScratchNotationPanel.swift, LivePerformedNotationTracker.swift, ReferenceAuthoringViewModel.swift, ReferenceAuthoringView.swift, ScratchPhraseChartView.swift. Two test files: LivePerformedNotationTrackerTests.swift, MacCameraPreviewViewTests.swift. Worker-prepared lossless drawing geometry/mixer lanes; bounded 5 Hz form refresh with direct live leaves and asynchronous unthrottled stop events; stable preflight source order/cell identity; fixed-height scrollable live reasons; identical view-model state deduplicated. Raw capture engine/cadence/evidence, decoder, persistence/export, resources and signing settings untouched. All unrelated baseline bytes preserved.
+
+Full unchanged scripts/build.sh all PASS: 9,282 XCTest passed, 124 existing skips, zero failures; 1,064 named Swift Testing and 123 Python passed. iOS, macOS Release/CXLRelease and Watch builds PASS. Three new regressions and the strengthened atomic matching-geometry publication test each executed twice. The optional focused invocation selected zero tests due to a duplicated target prefix and is explicitly NO COVERAGE; actual regression evidence comes from the full unfiltered gate. First warm build's exhaustive-switch error was corrected; failed receipt retained. Every final supervisor reaped its child with no survivors.
+
+Developer ID universal build/settings parity, exact runtime/data/resource equivalence with verified Release on both architectures, identity/permissions/entitlements, strict signature verification and ZIP roundtrip PASS. Version remains 1.0.1 (24); NOT notarized.
+
+Delivery: /Users/karlwatson/Downloads/SL-Capture-Intel-UI-Fix-2-2026-10-11.zip
+ZIP SHA-256: ed6b786160203715998816614622d2e34122f0d38eae9df7f0c1add96b654a64
+Executable SHA-256: e108fd8d4e14df074c19f64085c27964d8325e6cc48cdc63f71c3d3bcc10fc15
+Intel UUID: B95214FF-4C43-3EB0-A3E3-521BE897188D
+Apple silicon UUID: 75D99E2A-14D3-34BE-83CC-25D3E48938D0
+Durable report and receipts: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-11/intel-ui-fix-2/RESULT.md
+
+Old app, previous ZIP and saved data unchanged. No production install/launch, commit, push or external upload. Exact 752-file frozen tested source archived and verified, with final workflow records separately retained. Intel CPU/UI and physical acceptance of Fix 2 NOT RUN. Next: quit the old Intel app, open SL Capture from the UI Fix 2 folder (avoid the old Dock shortcut), compare the same workload and complete one record/play/save/reopen/export check. Keep Codex/builds on the other Mac for that comparison. If lag persists, retain the next process sample against the above UUID; do not claim all load is resolved or change raw capture truth. Do not repeat passed software gates without changed inputs or a new concern.
+
+
+## 12 October 2026 — UI Fix 3 verification checkpoint
+
+Canonical branch codex/cxl-fader-checkpoint-20261003, HEAD 5e59ca85e70a2a0ecb78224ed72e83a5fd4c6294. User Sample 3 and video confirm UI Fix 2 responsiveness FAIL (x86 UUID B95214FF-4C43-3EB0-A3E3-521BE897188D). Selected next repair: isolate app-wide service lifetime from child publications; eager two-column preflight Grid. Raw capture engine, evidence/coordinates, recorder, persistence/export and signing untouched. Two source files plus two test files changed; preservation evidence at /private/tmp/sl-capture-ui-round3-20261012.
+
+Native hosted UI regression PASS: 3 named tests in both configurations, 6 executions/0 failures; real production service owner and synthetic camera/meter changes. In each run, old direct-observing root rebuilt 30 times; isolated root 0; live leaf 30 and latest position correct. No hardware/Intel performance claim. Full unchanged scripts/build.sh all ACTIVE in exec session 9578, driver full-driver.log. Exact frozen 752-file snapshot at /private/tmp/sl-capture-ui-round3-20261012/verification. Do not edit the verifier or duplicate active tests. Warm build and repository-access probe PASS. Full results/platform builds and signed package pending.
+
+Delivery drivers prepared, not executed: local-release/run_acceptance_build.py, compare_payload.py, compare_functional_payload.py, package.py. Intended ZIP Downloads/SL-Capture-Intel-UI-Fix-3-2026-10-12.zip. Run only after full gate PASS and summarize_full.py validates actual named new tests twice. Current own disk headroom approximately 5 GiB; preserve existing products/media/evidence and only reclaim declared completed invocation caches if needed. No production launch/install, commit or push. Both earlier candidates failed Intel responsiveness; Fix 3 remains NOT RUN until operator acceptance.
+
+
+## 12 October 2026 — user-directed focused Capture workspace
+
+User asked for an independent capture-only view/window when Record is pressed and explicitly authorized a better alternative. Chosen dedicated workspace in the existing window to retain exactly one view-model lifecycle, recorder, camera preview and live notation tracker. Record switches from the long setup scroll form into fixed camera/sample/notation regions; Stop stays visible, Back is locked during active capture/finalization, and successful finalization returns to Review. Calibration controls are hidden during focus, and camera-guide lifetime belongs to the route across the presentation switch. Generic camera preview callers retain previous teardown behavior. No new recording, MIDI, raw evidence, schema or export path.
+
+The earlier UI Fix 3 full gate was deliberately cancelled through its supervisor for the changed scope, not a test failure. Receipt reports infrastructure error/exit70 from cancellation, childReaped=true, survivors=[]; full result is NOT PASS. Frozen old snapshot and receipt retained at /private/tmp/sl-capture-ui-round3-20261012. New evidence root /private/tmp/sl-capture-focus-20261012. Added real-form scroll and focused native-render regressions; pending execution. Two prior Intel candidates remain responsiveness FAIL. No third candidate has been delivered or physically verified. No commit/push/install.

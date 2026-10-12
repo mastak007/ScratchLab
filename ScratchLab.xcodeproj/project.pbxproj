@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		PHDVST000000000000BUILD /* PhaseDVSCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PHDVST0000000000000FILE; };
+		PHS9IN0000000000000BMAC /* PhaseS9InputCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = PHS9IN0000000000000FILE; };
+		PHDVS00000000000000BIOS /* PhaseDVSRecordingEvidence.swift in Sources */ = {isa = PBXBuildFile; fileRef = PHDVS00000000000000FILE; };
+		PHDVS00000000000000BMAC /* PhaseDVSRecordingEvidence.swift in Sources */ = {isa = PBXBuildFile; fileRef = PHDVS00000000000000FILE; };
 		05F9D91012A71F64B197833A /* LivePerformedNotationTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6159D19ABAFFEDC31B928846 /* LivePerformedNotationTracker.swift */; };
 		0640183FCA09CE900D306F4B /* Entry+ZIP64.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2DBAEFA99EE8144FDE46EAC /* Entry+ZIP64.swift */; };
 		0F14F0AAE75EC474DE0DDCDD /* Data+Serialization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 764F939FE06FBBE44F66CAB2 /* Data+Serialization.swift */; };
@@ -678,6 +682,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		PHDVST0000000000000FILE /* PhaseDVSCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhaseDVSCaptureTests.swift; sourceTree = "<group>"; };
+		PHS9IN0000000000000FILE /* PhaseS9InputCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhaseS9InputCapture.swift; sourceTree = "<group>"; };
+		PHDVS00000000000000FILE /* PhaseDVSRecordingEvidence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhaseDVSRecordingEvidence.swift; sourceTree = "<group>"; };
 		03DCFA12AB0F45ABAE1796FD /* TimecodeSourceState.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TimecodeSourceState.swift; sourceTree = "<group>"; };
 		0BAC4A44753A1FE444ED066E /* Archive+ReadingDeprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+ReadingDeprecated.swift"; sourceTree = "<group>"; };
 		0C63B14E9A67BCD33D3E122B /* LivePerformedNotationTrackerTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LivePerformedNotationTrackerTests.swift; sourceTree = "<group>"; };
@@ -1314,6 +1321,7 @@
 				TCR000010TCR010TCR00001 /* TimecodeLiveIntegrationTests.swift */,
 				TCR000012TCR012TCR00001 /* TimecodeLiveTapTests.swift */,
 				TRIR0000002TRIR0FILETEST /* TimecodeRealtimeIngressRingTests.swift */,
+				PHDVST0000000000000FILE /* PhaseDVSCaptureTests.swift */,
 				LLSS0000000LLSS0FILETEST /* LowLatencyTimecodeSinkSessionTests.swift */,
 				LLSL0000000LLSL0FILETEST /* LowLatencySinkLifecycleTests.swift */,
 				TCR000014TCR014TCR00001 /* TimecodePrototypeRecorderTests.swift */,
@@ -1487,6 +1495,7 @@
 				D1C0A002A1B2C3D4E5F60701 /* CaptureCore.swift */,
 				AHRS0000000AHRS0FILEREF /* AudioHardwareRouteState.swift */,
 				DVHP0000000DVHP0FILEREF /* DVSHardwareProfile.swift */,
+				PHDVS00000000000000FILE /* PhaseDVSRecordingEvidence.swift */,
 				SPCM000000SPCM01SPCM0001 /* ScratchPerformanceComparison.swift */,
 				SGAM000000SGAM01SGAM0001 /* ScratchGameplayAttempt.swift */,
 				PGCO000000PGCO01PGCO0001 /* PracticeGameplayCoordinator.swift */,
@@ -1702,6 +1711,7 @@
 				CXLSECONDARYCAMFILE00001 /* SecondaryCameraRecorder.swift */,
 				B2000005 /* MacCaptureEngine.swift */,
 				TRIR0000000TRIR0FILEPROD /* TimecodeRealtimeIngressRing.swift */,
+				PHS9IN0000000000000FILE /* PhaseS9InputCapture.swift */,
 				SBPA0001FREF /* ScratchBankPadAudioPlayer.swift */,
 				SSPC0001FREF /* ScratchSamplePlaybackController.swift */,
 				DCVR0001FREF /* DVSContinuousVinylRenderer.swift */,
@@ -2187,6 +2197,7 @@
 				9DFB00E0039ACBB0C00A6622 /* DeckGamificationOverlay.swift in Sources */,
 				B554DA1DDE31EE39B501D9C0 /* MacCaptureEngine.swift in Sources */,
 				TRIR0000001TRIR0BUILDPROD /* TimecodeRealtimeIngressRing.swift in Sources */,
+				PHS9IN0000000000000BMAC /* PhaseS9InputCapture.swift in Sources */,
 				SBPA0001DSRC /* ScratchBankPadAudioPlayer.swift in Sources */,
 				SSPC0001MAC /* ScratchSamplePlaybackController.swift in Sources */,
 				DCVR0001MAC /* DVSContinuousVinylRenderer.swift in Sources */,
@@ -2378,6 +2389,7 @@
 				DVS0MAC001DVS001DVS00001 /* DVSTimecodeStatus.swift in Sources */,
 				AHRSMAC0000AHRS0SOURCE /* AudioHardwareRouteState.swift in Sources */,
 				DVHP0MAC000DVHP0SOURCE /* DVSHardwareProfile.swift in Sources */,
+				PHDVS00000000000000BMAC /* PhaseDVSRecordingEvidence.swift in Sources */,
 				SCV0MAC001SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift in Sources */,
 				DVP0MAC001DVP001DVP00001 /* DVSControlVinylPanel.swift in Sources */,
 				DVSL0MAC001DVS001DVSL0001 /* DVSLiveLogger.swift in Sources */,
@@ -2597,6 +2609,7 @@
 				DVS0IOS001DVS001DVS00001 /* DVSTimecodeStatus.swift in Sources */,
 				AHRSIOS0000AHRS0SOURCE /* AudioHardwareRouteState.swift in Sources */,
 				DVHP0IOS000DVHP0SOURCE /* DVSHardwareProfile.swift in Sources */,
+				PHDVS00000000000000BIOS /* PhaseDVSRecordingEvidence.swift in Sources */,
 				SCV0IOS001SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift in Sources */,
 			);
 		};
@@ -2733,6 +2746,7 @@
 				TCT000002TCT002TCT00001 /* TimecodeLiveIntegrationTests.swift in Sources */,
 				TCT000003TCT003TCT00001 /* TimecodeLiveTapTests.swift in Sources */,
 				TRIR0000003TRIR0BUILDTEST /* TimecodeRealtimeIngressRingTests.swift in Sources */,
+				PHDVST000000000000BUILD /* PhaseDVSCaptureTests.swift in Sources */,
 				LLSS0000001LLSS0BUILDTEST /* LowLatencyTimecodeSinkSessionTests.swift in Sources */,
 				LLSL0000001LLSL0BUILDTEST /* LowLatencySinkLifecycleTests.swift in Sources */,
 				TCT000004TCT004TCT00001 /* TimecodePrototypeRecorderTests.swift in Sources */,

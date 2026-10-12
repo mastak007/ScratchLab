@@ -595,7 +595,7 @@ final class MacCameraPreviewViewTests: XCTestCase {
             "the 16:9 preview needs a ceiling so both panels fit"
         )
         XCTAssertTrue(
-            source.contains("previewHeight: Self.captureBoardCameraHeight"),
+            source.contains("previewHeight: cameraHeight") && source.contains("captureBoard(cameraHeight: Self.captureBoardCameraHeight"),
             "the CXL camera component receives the same bounded preview height"
         )
     }
@@ -641,7 +641,7 @@ final class MacCameraPreviewViewTests: XCTestCase {
         XCTAssertFalse(source.contains("LivePerformedNotationCard("),
                        "all CXL techniques use continuous canonical geometry")
         XCTAssertTrue(
-            source.contains("source: .canonical(projection.records, layer: .performance, frame: frame)"),
+            source.contains("?? .canonical(projection.records, layer: .performance, frame: frame)"),
             "tear notation must reach the shared chart as canonical gesture records"
         )
         // Unchanged safety boundary: the authoring view starts no capture,

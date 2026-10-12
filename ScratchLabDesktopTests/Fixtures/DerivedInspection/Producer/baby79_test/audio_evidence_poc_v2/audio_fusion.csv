@@ -1,0 +1,4 @@
+frame,timestamp_s,vision_velocity_deg_s,vision_direction,visual_confidence,vision_interpolated,vision_activity_raw,audio_evidence_available,audio_evidence_availability,audio_rms,audio_rms_dbfs,audio_motion_norm,audio_stillness_norm,audio_spectral_centroid_hz,audio_spectral_flux
+0,18.000000000,-44.846190000,REVERSE,0.997532000,False,True,True,available,0.002002246,-53.969651883,0.164037390,0.835962610,5616.840002554,0.000000000
+7,18.116783000,-21.623833000,STILL,0.985107000,False,False,True,available,0.000969304,-60.270801443,0.000000000,1.000000000,8300.967007327,0.007256825
+26,18.433767000,-28.255763000,STILL,0.898272000,False,False,True,available,0.002156509,-53.324974292,0.182451195,0.817548805,4812.320232397,0.067505574

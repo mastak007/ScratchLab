@@ -1,0 +1,81 @@
+{
+  "avLag": [],
+  "canonicalReference": false,
+  "hardwareGroundTruth": false,
+  "review": {
+    "evidenceFiles": [],
+    "notes": "Offline projection of existing POC evidence; no approval granted.",
+    "state": "needsReview"
+  },
+  "samples": [
+    {
+      "angleDegrees": 105.756596,
+      "angularVelocityDegreesPerSecond": -44.84619,
+      "direction": "REVERSE",
+      "frame": 0,
+      "interpolated": false,
+      "timestampSeconds": 18.0,
+      "visualConfidence": 0.997532
+    },
+    {
+      "angleDegrees": 113.191937,
+      "angularVelocityDegreesPerSecond": -21.623833,
+      "direction": "STILL",
+      "frame": 7,
+      "interpolated": false,
+      "timestampSeconds": 18.116783,
+      "visualConfidence": 0.985107
+    },
+    {
+      "angleDegrees": 26.819388,
+      "angularVelocityDegreesPerSecond": -28.255763,
+      "direction": "STILL",
+      "frame": 26,
+      "interpolated": false,
+      "timestampSeconds": 18.433767,
+      "visualConfidence": 0.898272
+    }
+  ],
+  "schemaVersion": "scratchlab_derived_reference_inspection_v1",
+  "source": {
+    "archive": "/Users/user/Developer/ScratchLab-Platter-POC/baby2.zip",
+    "bpm": 79,
+    "bpmSource": "folder_name",
+    "cameraAngle": "angle_3",
+    "datasetItemID": "79408a15b57e5e46ac7e683261669abb",
+    "ingestSourceType": "makemkv_dvd_rip",
+    "labelSource": "folder_name_makemkv_ingest",
+    "performanceID": "qbert_makemkv_dvd/Baby_79bpm",
+    "performer": "Qbert",
+    "scratchType": "baby",
+    "sourceCollection": "qbert_makemkv_dvd",
+    "sourceFolder": "Baby_79bpm",
+    "sourceMKV": "Baby_79bpm/title_t02.mkv",
+    "trainingUse": "primary_training",
+    "videoFile": "angle_3_video.mkv"
+  },
+  "sourceType": "videoDerived",
+  "timebase": {
+    "analysisDurationSeconds": 6.0,
+    "analysisFramesPerSecond": 59.94005994005994,
+    "referenceMetadataFile": "reference.json",
+    "sourceStartSeconds": 18.0
+  },
+  "trajectoryProvenance": {
+    "angleConvention": "smoothed_angle_deg; counterclockwise positive",
+    "method": "scratchlab_platter_poc.py; tracking in reference.json",
+    "referenceMetadataFile": "reference.json",
+    "sourceType": "videoDerived",
+    "trajectoryFile": "trajectory.csv",
+    "velocityConvention": "signed_velocity_deg_s_forward_positive; tracking.forwardSign=-1"
+  },
+  "turnarounds": [
+    {
+      "audioAvailability": "unavailable",
+      "directionChange": "REVERSE_TO_FORWARD",
+      "frame": 7,
+      "timestampSeconds": 18.116783333333334,
+      "visualConfidence": 0.985107
+    }
+  ]
+}

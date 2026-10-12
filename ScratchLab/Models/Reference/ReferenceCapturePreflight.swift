@@ -58,7 +58,13 @@ struct ReferenceLiveMIDIAddressObservation: Equatable, Sendable, Identifiable {
 }
 
 /// Everything the preflight panel observes, sampled at one instant.
+struct ReferencePhaseDVSPreflight: Equatable, Sendable {
+    let isReady: Bool
+    let detail: String
+}
+
 struct ReferencePreflightSnapshot: Equatable, Sendable {
+    let phaseDVS: ReferencePhaseDVSPreflight?
     /// Connected controller name, or `nil` when no MIDI source is selected.
     let controllerName: String?
     let controllerIdentifier: String?
@@ -129,8 +135,10 @@ struct ReferencePreflightSnapshot: Equatable, Sendable {
         crossfaderSecondsSinceLastMessage: Double? = nil,
         takeScopedCrossfaderEventCount: Int = 0,
         isRecordingTake: Bool = false,
-        observedMIDIAddresses: [ReferenceLiveMIDIAddressObservation] = []
+        observedMIDIAddresses: [ReferenceLiveMIDIAddressObservation] = [],
+        phaseDVS: ReferencePhaseDVSPreflight? = nil
     ) {
+        self.phaseDVS = phaseDVS
         self.crossfaderSecondsSinceLastMessage = crossfaderSecondsSinceLastMessage
         self.takeScopedCrossfaderEventCount = takeScopedCrossfaderEventCount
         self.isRecordingTake = isRecordingTake
@@ -429,19 +437,20 @@ enum ReferenceCapturePreflight {
 
         // Platter readiness survives ordinary stillness, but not a source or
         // connection change. The bridge only supplies current-generation traffic.
-        let platterReady = controllerIsConnected(snapshot: snapshot) && snapshot.platterEventCount > 0
+        let platterReady = snapshot.phaseDVS?.isReady
+            ?? (controllerIsConnected(snapshot: snapshot) && snapshot.platterEventCount > 0)
         checks.append(
             ReferencePreflightCheck(
                 id: "platter",
                 title: "Platter",
-                detail: platterReady
+                detail: snapshot.phaseDVS?.detail ?? (platterReady
                     ? (snapshot.platterIsMoving
                         ? "Ready — moving · \(snapshot.platterEventCount) messages seen."
                         : "Ready — idle · \(snapshot.platterEventCount) messages seen.")
-                    : "No platter traffic for the selected connection. Touch the platter after connecting.",
+                    : "No platter traffic for the selected connection. Touch the platter after connecting."),
                 status: platterReady
                     ? .satisfied
-                    : (expectation.requiresPlatterMotion && snapshot.platterEventCount == 0
+                    : (expectation.requiresPlatterMotion && !platterReady
                         ? .blocking
                         : .advisory)
             )

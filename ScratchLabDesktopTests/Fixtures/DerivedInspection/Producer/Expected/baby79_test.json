@@ -1,0 +1,168 @@
+{
+  "audio": {
+    "activityGateBasis": "frozen_vision_direction_plus_turnaround_padding",
+    "activityPadFields": 5,
+    "evidenceFile": "audio_evidence_poc_v2/audio_turnaround_evidence.json",
+    "frames": [
+      {
+        "availability": "available",
+        "frame": 0,
+        "motionNorm": 0.16403739,
+        "rms": 0.002002246,
+        "spectralFlux": 0.0,
+        "visionActive": true
+      },
+      {
+        "availability": "available",
+        "frame": 7,
+        "motionNorm": 0.0,
+        "rms": 0.000969304,
+        "spectralFlux": 0.007256825,
+        "visionActive": true
+      },
+      {
+        "availability": "available",
+        "frame": 26,
+        "motionNorm": 0.182451195,
+        "rms": 0.002156509,
+        "spectralFlux": 0.067505574,
+        "visionActive": true
+      }
+    ],
+    "modifiesVisionTrajectory": false,
+    "role": "noBeat",
+    "semantics": "beat_removed_program_audio_may_include_speech",
+    "sourceFile": "angle_3_noBeat.wav"
+  },
+  "avLag": [
+    {
+      "evidenceFile": "av_lag_poc/av_lag_report.json",
+      "feature": "audioMotionNorm",
+      "lagFields": 1,
+      "modifiesVisionTrajectory": false,
+      "pairs": 359,
+      "pearson": 0.7723902981529327,
+      "reportedAnalysisFPS": 59.94125756758216,
+      "spearman": 0.8484608167279232,
+      "subset": "visionGated"
+    },
+    {
+      "evidenceFile": "av_lag_poc/av_lag_report.json",
+      "feature": "audioMotionNorm",
+      "lagFields": 1,
+      "modifiesVisionTrajectory": false,
+      "pairs": 359,
+      "pearson": 0.7723902981529327,
+      "reportedAnalysisFPS": 59.94125756758216,
+      "spearman": 0.8484608167279232,
+      "subset": "visionGatedHighConfidence"
+    },
+    {
+      "evidenceFile": "av_lag_poc/av_lag_report.json",
+      "feature": "audioSpectralFlux",
+      "lagFields": 1,
+      "modifiesVisionTrajectory": false,
+      "pairs": 359,
+      "pearson": 0.7800642216836904,
+      "reportedAnalysisFPS": 59.94125756758216,
+      "spearman": 0.7793560635533215,
+      "subset": "visionGated"
+    },
+    {
+      "evidenceFile": "av_lag_poc/av_lag_report.json",
+      "feature": "audioSpectralFlux",
+      "lagFields": 1,
+      "modifiesVisionTrajectory": false,
+      "pairs": 359,
+      "pearson": 0.7800642216836904,
+      "reportedAnalysisFPS": 59.94125756758216,
+      "spearman": 0.7793560635533215,
+      "subset": "visionGatedHighConfidence"
+    }
+  ],
+  "canonicalReference": false,
+  "hardwareGroundTruth": false,
+  "review": {
+    "evidenceFiles": [],
+    "notes": "Offline projection of existing POC evidence; no approval granted.",
+    "state": "needsReview"
+  },
+  "samples": [
+    {
+      "angleDegrees": 105.756596,
+      "angularVelocityDegreesPerSecond": -44.84619,
+      "direction": "REVERSE",
+      "frame": 0,
+      "interpolated": false,
+      "timestampSeconds": 18.0,
+      "visualConfidence": 0.997532
+    },
+    {
+      "angleDegrees": 113.191937,
+      "angularVelocityDegreesPerSecond": -21.623833,
+      "direction": "STILL",
+      "frame": 7,
+      "interpolated": false,
+      "timestampSeconds": 18.116783,
+      "visualConfidence": 0.985107
+    },
+    {
+      "angleDegrees": 26.819388,
+      "angularVelocityDegreesPerSecond": -28.255763,
+      "direction": "STILL",
+      "frame": 26,
+      "interpolated": false,
+      "timestampSeconds": 18.433767,
+      "visualConfidence": 0.898272
+    }
+  ],
+  "schemaVersion": "scratchlab_derived_reference_inspection_v1",
+  "source": {
+    "archive": "/Users/user/Developer/ScratchLab-Platter-POC/baby2.zip",
+    "bpm": 79,
+    "bpmSource": "folder_name",
+    "cameraAngle": "angle_3",
+    "datasetItemID": "79408a15b57e5e46ac7e683261669abb",
+    "ingestSourceType": "makemkv_dvd_rip",
+    "labelSource": "folder_name_makemkv_ingest",
+    "performanceID": "qbert_makemkv_dvd/Baby_79bpm",
+    "performer": "Qbert",
+    "scratchType": "baby",
+    "sourceCollection": "qbert_makemkv_dvd",
+    "sourceFolder": "Baby_79bpm",
+    "sourceMKV": "Baby_79bpm/title_t02.mkv",
+    "trainingUse": "primary_training",
+    "videoFile": "angle_3_video.mkv"
+  },
+  "sourceType": "videoAudioDerived",
+  "timebase": {
+    "analysisDurationSeconds": 6.0,
+    "analysisFramesPerSecond": 59.94005994005994,
+    "referenceMetadataFile": "reference.json",
+    "sourceStartSeconds": 18.0
+  },
+  "trajectoryProvenance": {
+    "angleConvention": "smoothed_angle_deg; counterclockwise positive",
+    "method": "scratchlab_platter_poc.py; tracking in reference.json",
+    "referenceMetadataFile": "reference.json",
+    "sourceType": "videoDerived",
+    "trajectoryFile": "trajectory.csv",
+    "velocityConvention": "signed_velocity_deg_s_forward_positive; tracking.forwardSign=-1"
+  },
+  "turnarounds": [
+    {
+      "audioAvailability": "available",
+      "audioSupport": {
+        "localBaselineRMS": 0.047324039319712026,
+        "measuredLagFields": -1,
+        "measuredLagMilliseconds": -16.683333333333334,
+        "troughRMS": 0.0007234661398054417,
+        "troughRatio": 0.01528749764824268
+      },
+      "directionChange": "REVERSE_TO_FORWARD",
+      "frame": 7,
+      "timestampSeconds": 18.116783333333334,
+      "visualConfidence": 0.985107
+    }
+  ]
+}

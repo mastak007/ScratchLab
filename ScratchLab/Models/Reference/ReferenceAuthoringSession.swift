@@ -143,6 +143,7 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
     let mediaTimeOrigin: ReferenceMediaTimeOrigin?
     let sourceState: ReferencePerTakeSourceState?
     let mixerFaderEvidence: ScratchMixerFaderEvidence?
+    let phaseDVSEvidence: PhaseDVSRecordingEvidence?
 
     init(
         audio: ReferenceArtifactMeasurement,
@@ -167,7 +168,8 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
         witnessedTiming: ReferenceWitnessedTiming? = nil,
         mediaTimeOrigin: ReferenceMediaTimeOrigin? = nil,
         sourceState: ReferencePerTakeSourceState? = nil,
-        mixerFaderEvidence: ScratchMixerFaderEvidence? = nil
+        mixerFaderEvidence: ScratchMixerFaderEvidence? = nil,
+        phaseDVSEvidence: PhaseDVSRecordingEvidence? = nil
     ) {
         self.tearEvidenceSourceBinding = tearEvidenceSourceBinding
         self.rawSidecarURL = rawSidecarURL
@@ -175,6 +177,7 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
         self.mediaTimeOrigin = mediaTimeOrigin
         self.sourceState = sourceState
         self.mixerFaderEvidence = mixerFaderEvidence
+        self.phaseDVSEvidence = phaseDVSEvidence
         self.audio = audio
         self.video = video
         self.sidecar = sidecar
@@ -941,7 +944,8 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
             platterEvidenceIntervals: artifacts.platterEvidenceIntervals,
             crossfaderTakeStartState: artifacts.crossfaderTakeStartState,
             crossfaderTakeStartOutcome: takeStartOutcome,
-            mixerFaderEvidence: artifacts.mixerFaderEvidence
+            mixerFaderEvidence: artifacts.mixerFaderEvidence,
+            phaseDVSEvidence: artifacts.phaseDVSEvidence
         )
 
         let report = ReferenceValidator.validate(evidence, expectation: expectation, now: now)
@@ -1673,7 +1677,7 @@ struct ReferenceAuthoringTake: Equatable, Sendable, Identifiable {
             return restoredTearProjection
         }
 
-        let platterEvidence = CaptureCore.derivePlatterMotionEvidence(
+        let platterEvidence = (try? evidence.phaseDVSEvidence?.motionEvidence()) ?? CaptureCore.derivePlatterMotionEvidence(
             from: evidence.rawMixerMIDIEvents
         ).retaining(normalizedEvents: evidence.platterMovementEvents)
 

@@ -73,7 +73,7 @@ enum PhaseCapturePath: String, CaseIterable, Codable, Sendable {
     var setupInstruction: String {
         switch self {
         case .dvsThroughDJMS9:
-            return "Connect each Phase Receiver RCA output to the DJM-S9 line inputs, connect the S9 by USB, select the matching DVS input pair, and verify two clean control-tone channels before recording."
+            return "Right deck B: Phase Receiver RCA to S9 channel 2 LINE, S9 USB to this Mac, and Serato REL for scratch playback. Connect Phase Input, then check forward direction. This route records control tone on USB 3/4 and programme audio on USB 5/6."
         case .hidThroughSupportedDJSoftware:
             return "Phase HID is handled by supported DJ software. SL Capture does not receive Phase HID directly; use the DVS route for in-app platter evidence."
         }

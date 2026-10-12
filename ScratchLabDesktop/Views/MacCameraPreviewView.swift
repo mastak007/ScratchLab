@@ -156,6 +156,9 @@ struct CXLCameraCalibrationPreview: View {
     @ObservedObject var captureEngine: MacCaptureEngine
     var previewHeight: CGFloat = 360
     var captureInProgress: Bool = false
+    var showsCalibrationControls = true
+    /// Authoring owns teardown across setup/focused presentation changes.
+    var keepsCameraGuideOnDisappear = false
     @State private var displayedVideoRect: CGRect = .zero
 
     private var editsDisabled: Bool {
@@ -187,6 +190,7 @@ struct CXLCameraCalibrationPreview: View {
             .background(Color.black)
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
+            if showsCalibrationControls {
             HStack(spacing: 10) {
                 Text("Camera boxes · manual estimate")
                     .font(.caption.weight(.semibold))
@@ -206,11 +210,14 @@ struct CXLCameraCalibrationPreview: View {
                     : "Drag a box to move it; drag its green corner to resize. Lock when the boxes match your equipment.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            }
         }
         .onAppear { captureEngine.enableCXLCameraGuide() }
         .onChange(of: captureEngine.isAudioInputSelectionLocked) { _, locked in
             if !locked { captureEngine.enableCXLCameraGuide() }
         }
-        .onDisappear { captureEngine.disableCXLCameraGuide() }
+        .onDisappear {
+            if !keepsCameraGuideOnDisappear { captureEngine.disableCXLCameraGuide() }
+        }
     }
 }

@@ -269,6 +269,21 @@ public final class NotationCandidateAccumulator {
             .map(\.timestamp)
     }
 
+    /// Both live Review consumers share one detector pass over the same envelope.
+    public func currentReviewPreview(
+        detectorConfig: AudioOnsetDetectorConfig = .reviewPreview,
+        maxCandidates: Int = 80
+    ) -> (summary: NotationCandidateDiagnosticsSummary, marks: [TimeInterval]) {
+        guard let capped = computeReviewCandidates(detectorConfig: detectorConfig,
+                                                   maxCandidates: maxCandidates) else {
+            return (.empty, [])
+        }
+        let summary = NotationCandidateDiagnosticsSummary.summarize(
+            candidates: capped, envelopeFrameCount: envelope.count,
+            envelopeDurationSeconds: Double(envelope.count) * frameDuration)
+        return (summary, capped.filter { $0.kind != .silenceGap }.map(\.timestamp))
+    }
+
     private func computeReviewCandidates(
         detectorConfig: AudioOnsetDetectorConfig,
         maxCandidates: Int

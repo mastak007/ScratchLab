@@ -380,6 +380,65 @@ public final class TimecodeRealtimeIngressRing: @unchecked Sendable {
         return .published
     }
 
+    /// HAL interleaved Float32 ingress. The same SPSC ownership and bounds
+    /// apply as to planar ingress; callers must not mix producers on a ring.
+    @discardableResult
+    public func publishInterleaved(
+        bufferList: UnsafePointer<AudioBufferList>, channelCount: Int,
+        sampleRate: Double, timestamp: AudioTimeStamp
+    ) -> TimecodeRealtimeIngressPublishOutcome {
+        guard acceptingWritesFlag.load(ordering: .acquiring) else {
+            rejectedCounter.wrappingAdd(1, ordering: .relaxed)
+            return .rejectedNotAcceptingWrites
+        }
+        guard channelCount > 0, channelCount <= configuration.maximumChannelCount,
+              bufferList.pointee.mNumberBuffers == 1 else {
+            rejectedCounter.wrappingAdd(1, ordering: .relaxed)
+            return .rejectedBufferCountMismatch
+        }
+        let buffer = bufferList.pointee.mBuffers
+        let stride = channelCount * MemoryLayout<Float>.size
+        guard Int(buffer.mNumberChannels) == channelCount, let data = buffer.mData,
+              Int(buffer.mDataByteSize) % stride == 0 else {
+            rejectedCounter.wrappingAdd(1, ordering: .relaxed)
+            return .rejectedUndersizedData
+        }
+        let frames = Int(buffer.mDataByteSize) / stride
+        guard frames > 0, frames <= configuration.maximumFrameCountPerSlot else {
+            rejectedCounter.wrappingAdd(1, ordering: .relaxed)
+            return .rejectedInvalidFrameCount
+        }
+        guard sampleRate.isFinite, sampleRate > 0,
+              timestamp.mFlags.contains([.hostTimeValid, .sampleTimeValid]),
+              timestamp.mHostTime > 0, timestamp.mSampleTime.isFinite,
+              timestamp.mSampleTime >= Double(Int64.min),
+              timestamp.mSampleTime < Double(Int64.max),
+              timestamp.mSampleTime.rounded() == timestamp.mSampleTime else {
+            rejectedCounter.wrappingAdd(1, ordering: .relaxed)
+            return .rejectedInvalidSampleRate
+        }
+        let write = writeCounter.load(ordering: .relaxed)
+        let read = readCounter.load(ordering: .acquiring)
+        guard write &- read < UInt64(configuration.slotCount) else {
+            droppedCounter.wrappingAdd(1, ordering: .relaxed)
+            return .droppedRingFull
+        }
+        let slot = Int(write % UInt64(configuration.slotCount))
+        let destination = sampleStorage + slot * slotStride
+        let source = data.assumingMemoryBound(to: Float.self)
+        for channel in 0..<channelCount {
+            for frame in 0..<frames {
+                destination[channel * configuration.maximumFrameCountPerSlot + frame] = source[frame * channelCount + channel]
+            }
+        }
+        slotMetadataStorage[slot] = TimecodeRealtimeIngressSlotMetadata(
+            frameCount: Int32(frames), channelCount: Int32(channelCount), sampleRate: sampleRate,
+            hostTime: timestamp.mHostTime, sampleTime: Int64(timestamp.mSampleTime))
+        writeCounter.store(write &+ 1, ordering: .releasing)
+        publishedCounter.wrappingAdd(1, ordering: .relaxed)
+        return .published
+    }
+
     // MARK: - Non-realtime consumer entry point
 
     /// Drains every currently-published slot, calling `handler` once per

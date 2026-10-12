@@ -2629,7 +2629,7 @@ final class ReferenceAuthoringViewModel: ObservableObject {
             resetTearComparison()
         }
         #endif
-        state = update.state
+        if state != update.state { state = update.state }
         if let error = update.errorMessage {
             visibleMessage = error
         }

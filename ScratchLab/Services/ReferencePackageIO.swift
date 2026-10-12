@@ -12,6 +12,7 @@
 
 import Foundation
 import CryptoKit
+import AVFoundation
 
 enum ReferencePackageIOError: LocalizedError, Equatable {
     case sourceArtifactMissing(role: String, path: String)
@@ -188,6 +189,19 @@ enum ReferencePackageIO {
 
     // MARK: - Read
 
+    /// Reads only the normalized inspection JSON. Never reads media, resolves
+    /// source paths, writes artifacts or calls canonical package verification.
+    static func readDerivedInspection(at url: URL) throws -> DerivedReferenceInspectionDocument {
+        guard url.isFileURL else { throw ReferencePackageIOError.unsafePackagePath(url.absoluteString) }
+        return try decodeDerivedInspection(Data(contentsOf: url))
+    }
+
+    static func decodeDerivedInspection(_ data: Data) throws -> DerivedReferenceInspectionDocument {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(DerivedReferenceInspectionDocument.self, from: data)
+    }
+
     static func readManifest(
         atPackageURL packageURL: URL,
         fileManager: FileManager = .default
@@ -290,6 +304,23 @@ enum ReferencePackageIO {
                 }
             }
         }
+        if let record = manifest.artifact(role: .takeSidecar) {
+            do {
+                let data = try Data(contentsOf: packageURL.appendingPathComponent(record.path))
+                let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                if object?["phaseDVSEvidence"] != nil || manifest.artifact(role: .phaseDVSControl) != nil {
+                    let sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: data)
+                    guard let phase = sidecar.phaseDVSEvidence,
+                          let raw = manifest.artifact(role: .phaseDVSControl), raw.sha256 == phase.rawControlSHA256,
+                          phase.sessionID == sidecar.sessionID, phase.takeID == sidecar.takeID,
+                          phase.deviceUID == sidecar.audioDeviceUniqueID,
+                          URL(fileURLWithPath: raw.path).lastPathComponent == phase.rawControlFileName,
+                          try phase.motionEvidence().events == sidecar.detectedNotation?.recordMovementEvents else {
+                        throw PhaseDVSRecordingEvidence.ValidationError.invalidEvidence
+                    }
+                }
+            } catch { issues.append("Phase DVS control audio and take evidence do not match.") }
+        }
         if manifest.requiresExactSourceEvidence && !manifest.requiresExactWatchArtifact,
            let sidecarRecord = manifest.artifact(role: .takeSidecar) {
             do {
@@ -359,5 +390,26 @@ enum ReferencePackageIO {
         guard !path.isEmpty, !path.hasPrefix("/"), !path.contains("\\") else { return false }
         let components = path.split(separator: "/", omittingEmptySubsequences: false)
         return !components.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
+    }
+}
+
+
+extension PhaseDVSRecordingEvidence {
+    /// Shared by draft, reference-package and session exporters. A portable
+    /// capture must retain the exact control WAV, never just a decoded curve.
+    func verifiedControlURL(beside mediaURL: URL) throws -> URL {
+        try validate()
+        let directory = mediaURL.deletingLastPathComponent().standardizedFileURL.resolvingSymlinksInPath()
+        let url = directory.appendingPathComponent(rawControlFileName).resolvingSymlinksInPath()
+        guard url.deletingLastPathComponent() == directory,
+              ReferencePackageIO.sha256Hex(try Data(contentsOf: url, options: .mappedIfSafe)) == rawControlSHA256 else {
+            throw ReferencePackageIOError.packageRejected(["Phase control audio is missing or differs from the captured source."])
+        }
+        let file = try AVAudioFile(forReading: url)
+        guard file.fileFormat.sampleRate == sampleRate, file.fileFormat.channelCount == 2,
+              file.fileFormat.commonFormat == .pcmFormatFloat32, file.length == rawFrameCount else {
+            throw ReferencePackageIOError.packageRejected(["Phase control WAV format or frame count differs from its recorded evidence."])
+        }
+        return url
     }
 }

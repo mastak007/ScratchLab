@@ -511,6 +511,32 @@ extension ScratchStrokeGeometry {
         let hasUnplacedEvidence: Bool
     }
 
+    /// Size-independent drawing input. Live callers prepare this on their
+    /// worker; Canvas only maps the retained geometry into its current size.
+    /// No evidence is decimated, persisted or fed back into capture.
+    struct PreparedCanonicalChart: Equatable, Sendable {
+        let frame: CanonicalFrame
+        let layer: CanonicalLayer
+        let geometry: CanonicalGeometry
+        let mixerSpans: [ScratchMixerFaderEvidence.Control: [ScratchMixerFaderEvidence.Span]]?
+        let combinedMixerSpans: [ScratchMixerFaderEvidence.Span]?
+
+        init(records: [ScratchNotation.GestureRecord], layer: CanonicalLayer,
+             frame: CanonicalFrame, wrapPeriod: Double? = nil,
+             mixerFaders: ScratchMixerFaderEvidence? = nil) {
+            self.frame = frame
+            self.layer = layer
+            geometry = canonicalGeometry(records: records, layer: layer,
+                                         frame: frame, wrapPeriod: wrapPeriod)
+            mixerSpans = mixerFaders.map { evidence in
+                Dictionary(uniqueKeysWithValues: ScratchMixerFaderEvidence.Control.allCases.map {
+                    ($0, evidence.spans(for: $0, in: frame.timeRange))
+                })
+            }
+            combinedMixerSpans = mixerFaders?.combinedSpans(in: frame.timeRange)
+        }
+    }
+
     /// Preserves every supplied curve point and hold position. No speed bucket,
     /// ratio template, release assumption, click threshold or curve fallback.
     /// Piecewise linear clipping at stream boundaries preserves the local slope.

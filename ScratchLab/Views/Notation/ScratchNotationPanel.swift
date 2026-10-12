@@ -193,6 +193,11 @@ struct ScratchNotationPanel: View {
             let unknown = !geometry.missingMotion.isEmpty || geometry.fader.contains { $0.state == nil }
                 || geometry.hasUnplacedEvidence
             return "\(laneTitle) — canonical motion and fader evidence\(unknown ? "; unknown or missing evidence" : "")"
+        case .preparedCanonical(let prepared):
+            let geometry = prepared.geometry
+            let unknown = !geometry.missingMotion.isEmpty || geometry.fader.contains { $0.state == nil }
+                || geometry.hasUnplacedEvidence
+            return "\(laneTitle) — canonical motion and fader evidence\(unknown ? "; unknown or missing evidence" : "")"
         case .empty(let message): return "Notation unavailable — \(message)"
         }
     }

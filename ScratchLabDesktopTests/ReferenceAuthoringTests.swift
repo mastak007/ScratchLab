@@ -13,6 +13,332 @@ import AVFoundation
 import XCTest
 @testable import ScratchLab
 
+final class DerivedReferenceInspectionTests: XCTestCase {
+    private func fixtureURL(_ name: String = "baby79_test") -> URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/DerivedInspection/\(name).json")
+    }
+
+    private func edited(_ name: String = "baby79_test", _ edit: (inout [String: Any]) -> Void) throws -> Data {
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL(name))) as? [String: Any])
+        edit(&json)
+        return try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
+    }
+
+    private func decode(_ data: Data) throws -> DerivedReferenceInspectionDocument {
+        try ReferencePackageIO.decodeDerivedInspection(data)
+    }
+
+    func testOfflineAnnotationsRoundTripWithoutChangingEvidenceOrEligibility() throws {
+        let original = try ReferencePackageIO.readDerivedInspection(at: fixtureURL())
+        let annotations: [[String: Any]] = [
+            ["firstFrame": 0, "lastFrame": 7, "kind": "suspect", "reason": "suspectedNonMarkerLock",
+             "reviewer": "Research reviewer", "evidenceReference": "research/marker-review"],
+            ["firstFrame": 10, "lastFrame": 10, "kind": "unavailable", "reason": "handOcclusion",
+             "reviewer": "Research reviewer", "evidenceReference": "research/occlusion-review"],
+            ["firstFrame": 238, "lastFrame": 238, "kind": "manualExclusion", "reason": "blendedEditTransition",
+             "reviewer": "Research reviewer", "evidenceReference": "research/ending-review"]
+        ]
+        let bytes = try edited {
+            var review = $0["review"] as! [String: Any]
+            review["annotations"] = annotations
+            $0["review"] = review
+        }
+        let document = try decode(bytes)
+        XCTAssertEqual(document.review.annotations?.map(\.kind), [.suspect, .unavailable, .manualExclusion])
+        XCTAssertEqual(document.samples, original.samples)
+        XCTAssertEqual(document.turnarounds, original.turnarounds)
+        XCTAssertEqual(document.audio, original.audio)
+        XCTAssertEqual(document.avLag, original.avLag)
+        XCTAssertEqual(document.source, original.source)
+        XCTAssertEqual(document.timebase, original.timebase)
+        XCTAssertEqual(document.trajectoryProvenance, original.trajectoryProvenance)
+        XCTAssertFalse(document.hardwareGroundTruth)
+        XCTAssertFalse(document.canonicalReference)
+        XCTAssertFalse(document.isTrainingEligible)
+        XCTAssertEqual(try decode(ReferencePackageIO.encoder.encode(document)), document)
+        XCTAssertNil(original.review.annotations, "Earlier producer documents need no annotations")
+    }
+
+    func testOfflineAnnotationValidationStillFailsClosed() throws {
+        let valid: [String: Any] = ["firstFrame": 0, "lastFrame": 7, "kind": "unavailable",
+            "reason": "missingVisualEvidence", "reviewer": "Research reviewer", "evidenceReference": "research/review"]
+        var malformed = [[String: Any]]()
+        for (key, value) in [("firstFrame", -1 as Any), ("firstFrame", 8), ("lastFrame", 100_000),
+                             ("reviewer", " "), ("evidenceReference", ""),
+                             ("reason", "blendedEditTransition"), ("reason", "automaticApproval"),
+                             ("kind", "observed")] {
+            var annotation = valid
+            annotation[key] = value
+            malformed.append(annotation)
+        }
+        for key in valid.keys {
+            var annotation = valid
+            annotation.removeValue(forKey: key)
+            malformed.append(annotation)
+        }
+        for annotation in malformed {
+            let bytes = try edited {
+                var review = $0["review"] as! [String: Any]
+                review["annotations"] = [annotation]
+                $0["review"] = review
+            }
+            XCTAssertThrowsError(try decode(bytes), "Malformed annotation: \(annotation)")
+            XCTAssertThrowsError(try JSONDecoder().decode(DerivedReferenceInspectionDocument.self, from: bytes))
+        }
+    }
+
+    func testBothPOCWindowsDecodeAsOneUnapprovedSourcePerformance() throws {
+        let dev = try ReferencePackageIO.readDerivedInspection(at: fixtureURL())
+        let holdout = try ReferencePackageIO.readDerivedInspection(at: fixtureURL("baby79_holdout_24_30"))
+        XCTAssertEqual(dev.source.performanceID, holdout.source.performanceID)
+        XCTAssertEqual(dev.source.sourceMKV, holdout.source.sourceMKV)
+        XCTAssertEqual(dev.source.trainingUse, "primary_training")
+        for document in [dev, holdout] {
+            XCTAssertEqual(document.sourceType, .videoAudioDerived)
+            XCTAssertFalse(document.hardwareGroundTruth)
+            XCTAssertFalse(document.canonicalReference)
+            XCTAssertFalse(document.isTrainingEligible)
+            XCTAssertTrue(document.requiresHumanReview)
+            XCTAssertTrue(ReferenceValidator.derivedInspectionIssues(document).isEmpty)
+            XCTAssertEqual(try decode(ReferencePackageIO.encoder.encode(document)), document)
+        }
+    }
+
+    func testMissingAndHardwareProvenanceAreRejectedEvenByDirectCodable() throws {
+        for key in ["sourceType", "hardwareGroundTruth", "canonicalReference", "trajectoryProvenance", "source", "review"] {
+            let bytes = try edited { $0.removeValue(forKey: key) }
+            XCTAssertThrowsError(try JSONDecoder().decode(DerivedReferenceInspectionDocument.self, from: bytes), key)
+        }
+        for sourceType in ["hardwareTelemetry", "", "unknown"] {
+            XCTAssertThrowsError(try decode(edited { $0["sourceType"] = sourceType }))
+        }
+        for key in ["hardwareGroundTruth", "canonicalReference"] {
+            XCTAssertThrowsError(try decode(edited { $0[key] = true }))
+        }
+        XCTAssertThrowsError(try decode(edited {
+            var provenance = $0["trajectoryProvenance"] as! [String: Any]
+            provenance["method"] = " "
+            $0["trajectoryProvenance"] = provenance
+        }))
+    }
+
+    func testMetadataOwnsClockNotRoundedSamplesOrLagReport() throws {
+        let document = try ReferencePackageIO.readDerivedInspection(at: fixtureURL())
+        XCTAssertEqual(document.timebase.analysisFramesPerSecond, 59.94005994005994)
+        XCTAssertEqual(document.timebase.frameDurationMilliseconds, 16.683333333333334, accuracy: 1e-12)
+        XCTAssertNotEqual(document.timebase.analysisFramesPerSecond, document.avLag[0].reportedAnalysisFPS)
+        XCTAssertEqual(document.samples[1].timestampSeconds, 18.116783)
+        XCTAssertEqual(document.timebase.sourceSeconds(frame: 7), 18.116783333333334, accuracy: 1e-12)
+        XCTAssertEqual(document.turnarounds[0].timestampSeconds, 18.116783333333334)
+    }
+
+    func testMissingInvalidAndConflictingTimebaseRejected() throws {
+        XCTAssertThrowsError(try decode(edited { $0.removeValue(forKey: "timebase") }))
+        for key in ["analysisFramesPerSecond", "sourceStartSeconds", "analysisDurationSeconds", "referenceMetadataFile"] {
+            XCTAssertThrowsError(try decode(edited {
+                var time = $0["timebase"] as! [String: Any]
+                time.removeValue(forKey: key); $0["timebase"] = time
+            }))
+        }
+        for fps in [0.0, -1.0, 59.94125756758216, 1e-320] {
+            XCTAssertThrowsError(try decode(edited {
+                var time = $0["timebase"] as! [String: Any]
+                time["analysisFramesPerSecond"] = fps; $0["timebase"] = time
+            }))
+        }
+        XCTAssertThrowsError(try decode(edited {
+            var time = $0["timebase"] as! [String: Any]
+            time["referenceMetadataFile"] = "other.json"; $0["timebase"] = time
+        }))
+    }
+
+    func testAudioChangesCannotRewriteVision() throws {
+        let original = try ReferencePackageIO.readDerivedInspection(at: fixtureURL())
+        let changed = try decode(edited {
+            var audio = $0["audio"] as! [String: Any]
+            var frames = audio["frames"] as! [[String: Any]]
+            frames[0]["rms"] = 900.0; frames[0]["motionNorm"] = 1.0
+            audio["frames"] = frames; $0["audio"] = audio
+        })
+        XCTAssertEqual(changed.samples, original.samples)
+        XCTAssertEqual(changed.turnarounds, original.turnarounds)
+        XCTAssertEqual(changed.timebase, original.timebase)
+        XCTAssertThrowsError(try decode(edited {
+            var audio = $0["audio"] as! [String: Any]
+            audio["modifiesVisionTrajectory"] = true; $0["audio"] = audio
+        }))
+    }
+
+    func testInactiveSpeechProgramAudioRemainsUnavailable() throws {
+        let document = try ReferencePackageIO.readDerivedInspection(at: fixtureURL("baby79_holdout_24_30"))
+        let audio = try XCTUnwrap(document.audio)
+        XCTAssertEqual(audio.semantics, .beatRemovedProgramAudioMayIncludeSpeech)
+        let frame = try XCTUnwrap(audio.frames.last)
+        XCTAssertEqual(frame.availability, .inactivePlatter)
+        XCTAssertGreaterThan(try XCTUnwrap(frame.rms), 0.24)
+        XCTAssertNil(frame.availableMotionEvidence)
+        XCTAssertEqual(document.samples.last?.direction, .still)
+        for field in ["availability", "motionNorm"] {
+            XCTAssertThrowsError(try decode(edited("baby79_holdout_24_30") {
+                var audio = $0["audio"] as! [String: Any]
+                var frames = audio["frames"] as! [[String: Any]]
+                frames[3][field] = field == "availability" ? "available" : 0.9
+                audio["frames"] = frames; $0["audio"] = audio
+            }))
+        }
+    }
+
+    func testInterpolationAndUnknownEstimatesSurvive() throws {
+        let document = try ReferencePackageIO.readDerivedInspection(at: fixtureURL("baby79_holdout_24_30"))
+        let sample = try XCTUnwrap(document.samples.first { $0.frame == 238 })
+        XCTAssertTrue(sample.interpolated)
+        XCTAssertEqual(sample.direction, .unknown)
+        XCTAssertEqual(sample.visualConfidence, 0.413796)
+        XCTAssertEqual(sample.angularVelocityDegreesPerSecond, 1394.138571)
+        XCTAssertEqual(try decode(ReferencePackageIO.encoder.encode(document)).samples, document.samples)
+    }
+
+    func testPerDocumentLagIsDiagnosticAndNotGloballyOneField() throws {
+        let holdout = try ReferencePackageIO.readDerivedInspection(at: fixtureURL("baby79_holdout_24_30"))
+        XCTAssertEqual(holdout.avLag.map(\.lagFields), [1, 2])
+        XCTAssertEqual(holdout.lagMilliseconds(holdout.avLag[1]), 33.36666666666667, accuracy: 1e-10)
+        let changed = try decode(edited {
+            var lags = $0["avLag"] as! [[String: Any]]
+            lags[0]["lagFields"] = -3; lags[0]["pearson"] = -0.42
+            $0["avLag"] = lags
+        })
+        XCTAssertEqual(changed.lagMilliseconds(changed.avLag[0]), -50.05, accuracy: 1e-10)
+        XCTAssertEqual(changed.avLag[0].pearson, -0.42)
+        XCTAssertEqual(changed.timebase.sourceStartSeconds, 18)
+        XCTAssertEqual(changed.turnarounds[0].timestampSeconds, 18.116783333333334)
+    }
+
+    func testVideoOnlyRequiresNoAudioClaims() throws {
+        let bytes = try edited {
+            $0["sourceType"] = "videoDerived"; $0.removeValue(forKey: "audio"); $0["avLag"] = []
+            var events = $0["turnarounds"] as! [[String: Any]]
+            events[0]["audioAvailability"] = "unavailable"; events[0].removeValue(forKey: "audioSupport")
+            $0["turnarounds"] = events
+        }
+        let document = try decode(bytes)
+        XCTAssertEqual(document.sourceType, .videoDerived)
+        XCTAssertNil(document.audio)
+        XCTAssertFalse(document.isTrainingEligible)
+        XCTAssertThrowsError(try decode(edited { $0.removeValue(forKey: "audio") }))
+        XCTAssertThrowsError(try decode(edited { $0["sourceType"] = "videoDerived" }))
+    }
+
+    func testDerivedApprovalIsExplicitAndNeverCanonical() throws {
+        XCTAssertThrowsError(try decode(edited {
+            var review = $0["review"] as! [String: Any]
+            review["state"] = "approvedDerived"; $0["review"] = review
+        }))
+        let approved = try decode(edited {
+            var review = $0["review"] as! [String: Any]
+            review["state"] = "approvedDerived"; review["reviewer"] = "Fixture reviewer"
+            review["reviewedAt"] = "2026-09-26T00:00:00Z"; $0["review"] = review
+        })
+        XCTAssertFalse(approved.canonicalReference)
+        XCTAssertFalse(approved.isTrainingEligible)
+        XCTAssertFalse(approved.requiresHumanReview)
+    }
+
+    func testCannotDecodeAsCanonicalTakeManifestOrRegistryEntry() throws {
+        let bytes = try Data(contentsOf: fixtureURL())
+        XCTAssertThrowsError(try ReferencePackageIO.decoder.decode(ReferencePackageManifest.self, from: bytes))
+        XCTAssertThrowsError(try ReferencePackageIO.decoder.decode(ReferenceTakeMetadata.self, from: bytes))
+        XCTAssertThrowsError(try ReferencePackageIO.decoder.decode(ReferenceRegistryEntry.self, from: bytes))
+        XCTAssertTrue(ReferencePackageManifest.requiredArtifactRoles.contains(.rawMIDI))
+        XCTAssertTrue(ReferencePackageManifest.requiredArtifactRoles.contains(.crossfaderCalibrated))
+        XCTAssertFalse(ReferenceLifecycleState.reviewed.isPlayableByLearner)
+    }
+
+    func testMalformedFramesAndAudioDiagnosticsFailWithoutRepair() throws {
+        for field in ["frame", "timestampSeconds", "visualConfidence", "interpolated"] {
+            XCTAssertThrowsError(try decode(edited {
+                var samples = $0["samples"] as! [[String: Any]]
+                samples[0].removeValue(forKey: field); $0["samples"] = samples
+            }))
+        }
+        XCTAssertThrowsError(try decode(edited {
+            var samples = $0["samples"] as! [[String: Any]]
+            samples[1] = samples[0]; $0["samples"] = samples
+        }))
+        XCTAssertThrowsError(try decode(edited {
+            var lags = $0["avLag"] as! [[String: Any]]
+            lags[0]["pearson"] = 1.1; $0["avLag"] = lags
+        }))
+        XCTAssertThrowsError(try decode(edited {
+            var lags = $0["avLag"] as! [[String: Any]]
+            lags[0]["modifiesVisionTrajectory"] = true; $0["avLag"] = lags
+        }))
+    }
+}
+
+final class DerivedReferenceProducerTests: XCTestCase {
+    private func generated(_ name: String, videoOnly: Bool = false) throws -> DerivedReferenceInspectionDocument {
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        // Python tests reproduce these generated bytes exactly. No process/media
+        // tooling is launched inside the sandboxed app host.
+        let external = ProcessInfo.processInfo.environment["SCRATCHLAB_DERIVED_INSPECTION_OUTPUT_ROOT"]
+        let directory = external.map { URL(fileURLWithPath: $0) }
+            ?? repo.appendingPathComponent("ScratchLabDesktopTests/Fixtures/DerivedInspection/Producer/Expected")
+        let filename = name + (videoOnly ? "_video" : "") + ".json"
+        let document = try ReferencePackageIO.readDerivedInspection(at: directory.appendingPathComponent(filename))
+        if external != nil { XCTAssertEqual(document.samples.count, 360, "Explicit full-POC verification") }
+        return document
+    }
+
+    func testProducerOutputsDecodeThroughExistingIOWithSharedPerformanceIdentity() throws {
+        let dev = try generated("baby79_test")
+        let holdout = try generated("baby79_holdout_24_30")
+        XCTAssertEqual(dev.source, holdout.source)
+        for document in [dev, holdout] {
+            XCTAssertEqual(document.sourceType, .videoAudioDerived)
+            XCTAssertEqual(document.trajectoryProvenance.sourceType, .videoDerived)
+            XCTAssertEqual(document.timebase.analysisFramesPerSecond, 59.94005994005994)
+            XCTAssertFalse(document.hardwareGroundTruth)
+            XCTAssertFalse(document.canonicalReference)
+            XCTAssertFalse(document.isTrainingEligible)
+            XCTAssertTrue(document.requiresHumanReview)
+            XCTAssertEqual(document.source.trainingUse, "primary_training")
+            let data = try ReferencePackageIO.encoder.encode(document)
+            XCTAssertThrowsError(try ReferencePackageIO.decoder.decode(ReferencePackageManifest.self, from: data))
+        }
+        XCTAssertEqual(Set(dev.avLag.map(\.lagFields)), [1])
+        XCTAssertEqual(Set(holdout.avLag.map(\.lagFields)), [1, 2])
+        XCTAssertEqual(holdout.turnarounds[0].timestampSeconds, 24.166833333333333)
+        XCTAssertEqual(holdout.turnarounds[0].audioSupport?.measuredLagFields, 3)
+    }
+
+    func testProducerRetainsInactiveSpeechUnknownAndInterpolation() throws {
+        let doc = try generated("baby79_holdout_24_30")
+        let unknown = try XCTUnwrap(doc.samples.first { $0.frame == 62 })
+        XCTAssertEqual(unknown.direction, .unknown)
+        XCTAssertNil(unknown.angleDegrees)
+        let interpolated = try XCTUnwrap(doc.samples.first { $0.frame == 238 })
+        XCTAssertTrue(interpolated.interpolated)
+        XCTAssertEqual(interpolated.direction, .unknown)
+        XCTAssertEqual(interpolated.angularVelocityDegreesPerSecond, 1394.138571)
+        let inactive = try XCTUnwrap(doc.audio?.frames.last)
+        XCTAssertEqual(inactive.availability, .inactivePlatter)
+        XCTAssertGreaterThan(try XCTUnwrap(inactive.rms), 0.2)
+        XCTAssertNil(inactive.availableMotionEvidence)
+    }
+
+    func testProducerVideoOnlyKeepsIdenticalVisionWithoutAudioClaims() throws {
+        let video = try generated("baby79_test", videoOnly: true)
+        let audio = try generated("baby79_test")
+        XCTAssertEqual(video.sourceType, .videoDerived)
+        XCTAssertEqual(video.samples, audio.samples)
+        XCTAssertEqual(video.turnarounds.map(\.timestampSeconds), audio.turnarounds.map(\.timestampSeconds))
+        XCTAssertNil(video.audio)
+        XCTAssertTrue(video.avLag.isEmpty)
+        XCTAssertTrue(video.turnarounds.allSatisfy { $0.audioAvailability == .unavailable && $0.audioSupport == nil })
+    }
+}
+
 final class ReferenceExactBeatExportTests: XCTestCase {
     private func temporaryRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -3124,8 +3450,8 @@ final class ReferenceTearCanonicalProjectionTests: XCTestCase {
             encoding: .utf8
         )
         XCTAssertTrue(
-            referenceTake.contains("coordinates: .normalizedTakeLocal()"),
-            "build(for: evidence) must state that persisted positions are take-local."
+            referenceTake.contains("coordinates: evidence.phaseDVSEvidence?.coordinates ?? .normalizedTakeLocal()"),
+            "build(for: evidence) must retain the declared Phase take-local basis and the legacy take-local default."
         )
         XCTAssertFalse(
             referenceTake.contains(

@@ -1,0 +1,6 @@
+frame,timestamp_s,vision_velocity_deg_s,vision_direction,visual_confidence,vision_interpolated,vision_activity_raw,audio_evidence_available,audio_evidence_availability,audio_rms,audio_rms_dbfs,audio_motion_norm,audio_stillness_norm,audio_spectral_centroid_hz,audio_spectral_flux
+0,24.000000000,90.515322000,FORWARD,0.988832000,False,True,True,available,0.049588321,-26.092411899,0.949878259,0.050121741,2858.976796697,0.000000000
+10,24.166833000,-19.207120000,STILL,0.571962000,False,False,True,available,0.005302871,-45.509779150,0.258548149,0.741451851,3479.799336321,0.032150203
+62,25.034367000,,UNKNOWN,0.383785000,False,False,True,available,0.016798830,-35.494419109,0.615132019,0.384867981,1946.814273950,0.096197254
+238,27.970633000,1394.138571000,UNKNOWN,0.413796000,True,False,True,available,0.029901008,-30.486283326,0.793440181,0.206559819,2295.899804810,0.173472317
+359,29.989317000,-4.565388000,STILL,0.997224000,False,False,False,inactive_platter,0.247560008,-12.126390228,,,1226.791607291,0.272274146

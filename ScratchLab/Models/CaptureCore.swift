@@ -194,12 +194,11 @@ final class ScratchLabRuntimeDiagnostics: ObservableObject {
             }
             self.audioOnsetLastSummaryAt = now
             let summary = self.audioOnsetAccumulator.currentSummary()
-            let reviewSummary = self.audioOnsetAccumulator.currentReviewSummary()
-            let reviewMarks = self.audioOnsetAccumulator.currentReviewMarks()
+            let review = self.audioOnsetAccumulator.currentReviewPreview()
             DispatchQueue.main.async { [weak self] in
                 self?.audioOnsetSummary = summary
-                self?.audioOnsetReviewSummary = reviewSummary
-                self?.audioOnsetReviewMarks = reviewMarks
+                self?.audioOnsetReviewSummary = review.summary
+                self?.audioOnsetReviewMarks = review.marks
             }
         }
     }
@@ -11834,7 +11833,10 @@ enum CaptureCore {
 
         // An unspecified source must still resolve uniquely. Mixed sources
         // cannot establish stillness or a shared ring-counter baseline.
-        if Set(events.map { "\($0.deviceIdentifier ?? $0.deviceName)/\($0.channel)" }).count != 1 {
+        let firstSource = events[0].deviceIdentifier ?? events[0].deviceName
+        let firstChannel = events[0].channel
+        if !events.allSatisfy({ ($0.deviceIdentifier ?? $0.deviceName) == firstSource
+            && $0.channel == firstChannel }) {
             let times = events.map(\.takeRelativeTime).filter(\.isFinite)
             intervals.append(PlatterEvidenceInterval(startTime: times.min() ?? 0,
                 endTime: times.max() ?? 0, kind: .unknown))
@@ -12480,6 +12482,8 @@ enum CaptureCore {
         /// Independent software mixer controls, including held-state provenance.
         /// Missing in historical takes; absence never establishes an open channel.
         var mixerFaderEvidence: ScratchMixerFaderEvidence? = nil
+        /// Present only for an explicitly configured, independently recorded DVS source.
+        var phaseDVSEvidence: PhaseDVSRecordingEvidence? = nil
         var secondaryCamera: SecondaryCameraEvidence?
         var auditTrail: [CaptureAuditEvent]
 
@@ -13506,6 +13510,10 @@ struct SecondaryCameraEvidence: Codable, Equatable, Sendable {
 /// Versioned interpretation beside raw MIDI, never a replacement MIDI stream.
 /// Gains describe the software mixer gate, not proof that the sample is sounding.
 struct ScratchMixerFaderEvidence: Codable, Equatable, Sendable {
+    enum GainAuthority: String, Codable, Sendable { case externalUncalibrated }
+    /// Historical documents describe ScratchLab's own applied software gain.
+    /// External routing preserves measured positions without asserting that gain.
+    var gainAuthority: GainAuthority? = nil
     enum Control: String, Codable, CaseIterable, Sendable {
         case crossfader, rightChannel
         var title: String { self == .crossfader ? "CROSSFADER" : "RIGHT CHANNEL" }
@@ -13551,6 +13559,28 @@ struct ScratchMixerFaderEvidence: Codable, Equatable, Sendable {
         let end: Double
         let gain: Double?
         var state: ScratchNotationFaderState? { gain.map { $0 == 0 ? .closed : .open } }
+
+        /// Clip already-derived, ordered, nonoverlapping spans without rescanning
+        /// the raw observations for every gesture. No state is extended.
+        static func clipped(_ spans: [Self], to range: ClosedRange<Double>) -> [Self] {
+            guard range.lowerBound.isFinite, range.upperBound.isFinite,
+                  range.lowerBound < range.upperBound else { return [] }
+            var low = 0
+            var high = spans.count
+            while low < high {
+                let middle = low + (high - low) / 2
+                if spans[middle].end <= range.lowerBound { low = middle + 1 }
+                else { high = middle }
+            }
+            var result: [Self] = []
+            while low < spans.count, spans[low].start < range.upperBound {
+                let span = spans[low]
+                result.append(Self(start: max(span.start, range.lowerBound),
+                                   end: min(span.end, range.upperBound), gain: span.gain))
+                low += 1
+            }
+            return result
+        }
     }
 
     let version: Int
@@ -13574,7 +13604,7 @@ struct ScratchMixerFaderEvidence: Codable, Equatable, Sendable {
         guard range.lowerBound.isFinite, range.upperBound.isFinite,
               range.upperBound > range.lowerBound else { return [] }
         let unknown = [Span(start: range.lowerBound, end: range.upperBound, gain: nil)]
-        guard isUsable else { return unknown }
+        guard isUsable, gainAuthority != .externalUncalibrated else { return unknown }
         let events = observations.filter { $0.control == control }
         guard zip(events, events.dropFirst()).allSatisfy({ $0.time <= $1.time }),
               events.filter({ $0.kind == .heldAtStart }).count <= 1,

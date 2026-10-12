@@ -1,0 +1,169 @@
+{
+  "schemaVersion": "scratchlab_derived_reference_inspection_v1",
+  "sourceType": "videoAudioDerived",
+  "hardwareGroundTruth": false,
+  "canonicalReference": false,
+  "source": {
+    "performanceID": "qbert_makemkv_dvd/Baby_79bpm",
+    "sourceCollection": "qbert_makemkv_dvd",
+    "sourceMKV": "Baby_79bpm/title_t02.mkv",
+    "sourceFolder": "Baby_79bpm",
+    "cameraAngle": "angle_3",
+    "videoFile": "angle_3_video.mkv",
+    "archive": "baby2.zip",
+    "datasetItemID": "79408a15b57e5e46ac7e683261669abb",
+    "ingestSourceType": "makemkv_dvd_rip",
+    "labelSource": "folder_name_makemkv_ingest",
+    "performer": "Qbert",
+    "scratchType": "baby",
+    "bpm": 79,
+    "bpmSource": "folder_name",
+    "trainingUse": "primary_training"
+  },
+  "timebase": {
+    "analysisFramesPerSecond": 59.94005994005994,
+    "sourceStartSeconds": 24,
+    "analysisDurationSeconds": 6,
+    "referenceMetadataFile": "reference.json"
+  },
+  "trajectoryProvenance": {
+    "sourceType": "videoDerived",
+    "trajectoryFile": "trajectory.csv",
+    "referenceMetadataFile": "reference.json",
+    "method": "scratchlab_platter_poc.py frozen Baby marker tracker",
+    "angleConvention": "smoothed_angle_deg; counterclockwise positive",
+    "velocityConvention": "signed_velocity_deg_s_forward_positive"
+  },
+  "samples": [
+    {
+      "frame": 0,
+      "timestampSeconds": 24,
+      "angleDegrees": 42.467284,
+      "angularVelocityDegreesPerSecond": 90.515322,
+      "direction": "FORWARD",
+      "visualConfidence": 0.988832,
+      "interpolated": false
+    },
+    {
+      "frame": 10,
+      "timestampSeconds": 24.166833,
+      "angleDegrees": 11.858127,
+      "angularVelocityDegreesPerSecond": -19.20712,
+      "direction": "STILL",
+      "visualConfidence": 0.571962,
+      "interpolated": false
+    },
+    {
+      "frame": 238,
+      "timestampSeconds": 27.970633,
+      "angleDegrees": -0.701581,
+      "angularVelocityDegreesPerSecond": 1394.138571,
+      "direction": "UNKNOWN",
+      "visualConfidence": 0.413796,
+      "interpolated": true
+    },
+    {
+      "frame": 359,
+      "timestampSeconds": 29.989317,
+      "angleDegrees": 107.710163,
+      "angularVelocityDegreesPerSecond": -4.565388,
+      "direction": "STILL",
+      "visualConfidence": 0.997224,
+      "interpolated": false
+    }
+  ],
+  "turnarounds": [
+    {
+      "frame": 10,
+      "timestampSeconds": 24.166833333333333,
+      "directionChange": "FORWARD_TO_REVERSE",
+      "visualConfidence": 0.571962,
+      "audioAvailability": "available",
+      "audioSupport": {
+        "measuredLagFields": 3,
+        "measuredLagMilliseconds": 50.05,
+        "troughRMS": 0.0012801977903270838,
+        "localBaselineRMS": 0.04958832113514037,
+        "troughRatio": 0.025816518103894463
+      }
+    }
+  ],
+  "audio": {
+    "sourceFile": "angle_3_noBeat.wav",
+    "evidenceFile": "audio_evidence_poc_v2/audio_turnaround_evidence.json",
+    "role": "noBeat",
+    "semantics": "beat_removed_program_audio_may_include_speech",
+    "modifiesVisionTrajectory": false,
+    "activityGateBasis": "frozen_vision_direction_plus_turnaround_padding",
+    "activityPadFields": 5,
+    "frames": [
+      {
+        "frame": 0,
+        "visionActive": true,
+        "availability": "available",
+        "rms": 0.049588321,
+        "spectralFlux": 0,
+        "motionNorm": 0.949878259
+      },
+      {
+        "frame": 10,
+        "visionActive": true,
+        "availability": "available",
+        "rms": 0.005302871,
+        "spectralFlux": 0.032150203,
+        "motionNorm": 0.258548149
+      },
+      {
+        "frame": 238,
+        "visionActive": true,
+        "availability": "available",
+        "rms": 0.029901008,
+        "spectralFlux": 0.173472317,
+        "motionNorm": 0.793440181
+      },
+      {
+        "frame": 359,
+        "visionActive": false,
+        "availability": "inactive_platter",
+        "rms": 0.247560008,
+        "spectralFlux": 0.272274146,
+        "motionNorm": null
+      }
+    ]
+  },
+  "avLag": [
+    {
+      "evidenceFile": "av_lag_poc/av_lag_report.json",
+      "feature": "audioMotionNorm",
+      "subset": "visionGated",
+      "lagFields": 1,
+      "pairs": 258,
+      "pearson": 0.5358824834399716,
+      "spearman": 0.6987815169473577,
+      "reportedAnalysisFPS": 59.94125756758216,
+      "modifiesVisionTrajectory": false
+    },
+    {
+      "evidenceFile": "av_lag_poc/av_lag_report.json",
+      "feature": "audioSpectralFlux",
+      "subset": "visionGated",
+      "lagFields": 2,
+      "pairs": 257,
+      "pearson": 0.42225652176005585,
+      "spearman": 0.556457701791693,
+      "reportedAnalysisFPS": 59.94125756758216,
+      "modifiesVisionTrajectory": false
+    }
+  ],
+  "review": {
+    "state": "needsReview",
+    "reviewer": null,
+    "reviewedAt": null,
+    "notes": "Small schema fixture; raw validation remains unadjudicated. Not an independent session.",
+    "evidenceFiles": [
+      "validation_blind.json",
+      "validation_report.json",
+      "validation.csv"
+    ]
+  }
+}

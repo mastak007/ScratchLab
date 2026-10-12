@@ -385,6 +385,7 @@ struct ReferenceTakeEvidence: Codable, Equatable, Sendable {
     /// re-decided by each consumer.
     let crossfaderTakeStartOutcome: ReferenceCrossfaderTakeStart.Outcome?
     let mixerFaderEvidence: ScratchMixerFaderEvidence?
+    let phaseDVSEvidence: PhaseDVSRecordingEvidence?
     /// The derivation produced from the raw samples and the calibration.
     /// `nil` when derivation could not run (unusable or absent calibration).
     let derivation: CrossfaderDerivation?
@@ -411,7 +412,8 @@ struct ReferenceTakeEvidence: Codable, Equatable, Sendable {
         platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval] = [],
         crossfaderTakeStartState: CaptureCore.CrossfaderTakeStartState? = nil,
         crossfaderTakeStartOutcome: ReferenceCrossfaderTakeStart.Outcome? = nil,
-        mixerFaderEvidence: ScratchMixerFaderEvidence? = nil
+        mixerFaderEvidence: ScratchMixerFaderEvidence? = nil,
+        phaseDVSEvidence: PhaseDVSRecordingEvidence? = nil
     ) {
         self.watchEvidence = watchEvidence
         self.metadata = metadata
@@ -429,6 +431,7 @@ struct ReferenceTakeEvidence: Codable, Equatable, Sendable {
         self.crossfaderTakeStartState = crossfaderTakeStartState
         self.crossfaderTakeStartOutcome = crossfaderTakeStartOutcome
         self.mixerFaderEvidence = mixerFaderEvidence
+        self.phaseDVSEvidence = phaseDVSEvidence
         self.derivation = derivation
     }
 }
@@ -436,6 +439,140 @@ struct ReferenceTakeEvidence: Codable, Equatable, Sendable {
 // MARK: - Validator
 
 enum ReferenceValidator {
+
+    /// Inspection validity is deliberately separate from canonical take approval.
+    /// No sorting, clamping, interpolation, clock inference or evidence repair.
+    static func derivedInspectionIssues(_ document: DerivedReferenceInspectionDocument) -> [String] {
+        var issues: [String] = []
+        func require(_ condition: Bool, _ message: String) {
+            if !condition { issues.append("Derived inspection: " + message) }
+        }
+        func present(_ value: String) -> Bool { !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        func finite(_ value: Double?) -> Bool { value.map(\.isFinite) ?? true }
+        func nonnegative(_ value: Double?) -> Bool { value.map { $0.isFinite && $0 >= 0 } ?? true }
+        func unit(_ value: Double) -> Bool { value.isFinite && (0...1).contains(value) }
+        func ordered(_ frames: [Int]) -> Bool {
+            zip(frames, frames.dropFirst()).allSatisfy { $0 < $1 }
+        }
+        require(document.schemaVersion == DerivedReferenceInspectionDocument.currentSchemaVersion, "unsupported schemaVersion")
+        require(!document.hardwareGroundTruth, "hardwareGroundTruth must be false")
+        require(!document.canonicalReference, "canonicalReference must be false")
+        let source = document.source
+        for (key, value) in [
+            ("performanceID", source.performanceID), ("sourceCollection", source.sourceCollection),
+            ("sourceMKV", source.sourceMKV), ("sourceFolder", source.sourceFolder),
+            ("cameraAngle", source.cameraAngle), ("videoFile", source.videoFile),
+            ("archive", source.archive), ("datasetItemID", source.datasetItemID),
+            ("ingestSourceType", source.ingestSourceType), ("labelSource", source.labelSource),
+            ("scratchType", source.scratchType)
+        ] { require(present(value), "source.\(key) is required") }
+        if let bpm = source.bpm {
+            require(bpm.isFinite && bpm > 0 && source.bpmSource.map(present) == true, "known BPM requires positive value and bpmSource")
+        }
+        let time = document.timebase
+        let validTime = time.analysisFramesPerSecond.isFinite && time.analysisFramesPerSecond > 0
+            && time.frameDurationSeconds.isFinite && time.frameDurationSeconds > 0
+            && time.frameDurationMilliseconds.isFinite
+            && time.sourceStartSeconds.isFinite && time.sourceStartSeconds >= 0
+            && time.analysisDurationSeconds.isFinite && time.analysisDurationSeconds > 0
+            && (time.sourceStartSeconds + time.analysisDurationSeconds).isFinite
+        require(validTime && present(time.referenceMetadataFile), "invalid or unbound timebase")
+        let provenance = document.trajectoryProvenance
+        require(present(provenance.method) && present(provenance.trajectoryFile)
+            && present(provenance.angleConvention) && present(provenance.velocityConvention), "mandatory trajectory provenance is absent")
+        require(provenance.referenceMetadataFile == time.referenceMetadataFile, "trajectory and timebase reference metadata disagree")
+
+        // CSV timestamps are rounded to six decimal places. Tolerance checks
+        // serialization only; it never defines FPS or changes the stored value.
+        func validFrame(_ frame: Int, _ timestamp: Double) -> Bool {
+            guard validTime, frame >= 0, timestamp.isFinite else { return false }
+            let relative = Double(frame) / time.analysisFramesPerSecond
+            return relative.isFinite && relative < time.analysisDurationSeconds
+                && abs(timestamp - time.sourceSeconds(frame: frame)) <= 0.000_000_51
+        }
+        require(!document.samples.isEmpty, "vision samples are required")
+        require(ordered(document.samples.map(\.frame)), "sample frames must be unique and increasing")
+        for sample in document.samples {
+            require(validFrame(sample.frame, sample.timestampSeconds), "sample \(sample.frame) is outside the declared timebase")
+            require(finite(sample.angleDegrees) && finite(sample.angularVelocityDegreesPerSecond)
+                && unit(sample.visualConfidence), "sample \(sample.frame) contains invalid estimates/confidence")
+            if sample.direction != .unknown {
+                require(sample.angleDegrees != nil && sample.angularVelocityDegreesPerSecond != nil,
+                        "known sample direction requires vision angle and velocity estimates")
+            }
+        }
+        let samples = Dictionary(document.samples.map { ($0.frame, $0) }, uniquingKeysWith: { first, _ in first })
+        require(ordered(document.turnarounds.map(\.frame)), "turnaround frames must be unique and increasing")
+        for event in document.turnarounds {
+            require(validFrame(event.frame, event.timestampSeconds) && samples[event.frame] != nil,
+                    "turnaround \(event.frame) has no matching vision frame/timebase")
+            require(unit(event.visualConfidence) && event.visualConfidence == samples[event.frame]?.visualConfidence,
+                    "turnaround \(event.frame) visual confidence differs from vision evidence")
+            if let support = event.audioSupport {
+                require(event.audioAvailability == .available, "unavailable turnaround audio cannot carry motion support")
+                require(support.measuredLagFields.isFinite && support.measuredLagMilliseconds.isFinite
+                    && abs(support.measuredLagMilliseconds - support.measuredLagFields * time.frameDurationMilliseconds) < 0.000_001,
+                    "turnaround audio lag disagrees with the canonical timebase")
+                require(nonnegative(support.troughRMS) && nonnegative(support.localBaselineRMS)
+                    && nonnegative(support.troughRatio), "invalid turnaround audio diagnostics")
+            } else {
+                require(event.audioAvailability != .available, "available turnaround audio requires supporting evidence")
+            }
+        }
+        if let audio = document.audio {
+            require(document.sourceType == .videoAudioDerived, "audio support requires videoAudioDerived provenance")
+            require(!audio.modifiesVisionTrajectory, "audio must not modify vision trajectory")
+            require(present(audio.sourceFile) && present(audio.evidenceFile) && present(audio.activityGateBasis)
+                && audio.activityPadFields >= 0, "audio source and frozen vision gate provenance are required")
+            require(ordered(audio.frames.map(\.frame)), "audio frames must be unique and increasing")
+            require(Set(audio.frames.map(\.frame)) == Set(document.samples.map(\.frame)), "audio and vision frame sets differ")
+            for frame in audio.frames {
+                require(frame.visionActive || frame.availability != .available, "inactive platter audio cannot be available")
+                require(!frame.visionActive || frame.availability != .inactivePlatter, "active vision gate cannot be labelled inactivePlatter")
+                require(frame.availability == .available || frame.motionNorm == nil, "unavailable audio cannot carry normalized motion evidence")
+                require(nonnegative(frame.rms) && nonnegative(frame.spectralFlux)
+                    && frame.motionNorm.map(unit) != false, "invalid per-frame audio diagnostics")
+                if frame.availability == .available {
+                    require(frame.rms != nil, "available audio requires a measured RMS value")
+                }
+            }
+            let frames = Dictionary(audio.frames.map { ($0.frame, $0) }, uniquingKeysWith: { first, _ in first })
+            for event in document.turnarounds {
+                require(frames[event.frame]?.availability == event.audioAvailability,
+                        "turnaround audio availability differs from its vision-gated frame")
+            }
+        } else {
+            require(document.sourceType == .videoDerived, "videoAudioDerived requires audio evidence metadata")
+            require(document.avLag.isEmpty && document.turnarounds.allSatisfy {
+                $0.audioAvailability == .unavailable && $0.audioSupport == nil
+            }, "video-only evidence cannot claim audio support or measured AV lag")
+        }
+        for lag in document.avLag {
+            require(!lag.modifiesVisionTrajectory, "AV lag must not modify vision trajectory")
+            require(present(lag.evidenceFile) && present(lag.feature) && present(lag.subset)
+                && lag.lagFields.isFinite && document.lagMilliseconds(lag).isFinite
+                && lag.pairs > 0 && lag.reportedAnalysisFPS.isFinite && lag.reportedAnalysisFPS > 0,
+                    "invalid per-source AV-lag metadata")
+            require(lag.pearson.isFinite && (-1...1).contains(lag.pearson)
+                && lag.spearman.isFinite && (-1...1).contains(lag.spearman), "invalid diagnostic correlation coefficient")
+        }
+        let review = document.review
+        if review.state != .needsReview {
+            require(review.reviewer.map(present) == true && review.reviewedAt != nil,
+                    "reviewed derived evidence requires explicit reviewer and date")
+        }
+        require(review.evidenceFiles.allSatisfy(present), "review evidence references cannot be empty")
+        for annotation in review.annotations ?? [] {
+            require(annotation.firstFrame >= 0 && annotation.lastFrame >= annotation.firstFrame
+                && validTime && Double(annotation.lastFrame) / time.analysisFramesPerSecond < time.analysisDurationSeconds,
+                "review annotation has invalid analysis-frame bounds")
+            require(present(annotation.reviewer) && present(annotation.evidenceReference),
+                "review annotation requires reviewer and evidence reference")
+            require(annotation.reason != .blendedEditTransition || annotation.kind == .manualExclusion,
+                "blended/edit-transition annotations must be explicit manual exclusions")
+        }
+        return issues
+    }
 
     /// Peak level at or below which a program stem counts as silent.
     static let silenceThreshold: Double = 0.0005

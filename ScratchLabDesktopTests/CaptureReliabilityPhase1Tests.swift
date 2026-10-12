@@ -4058,7 +4058,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/ScratchLabDesktopApp.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        XCTAssertTrue(source.contains("@StateObject private var practiceBeatStore = PracticeBeatStore()"))
+        XCTAssertTrue(source.contains("let practiceBeatStore = PracticeBeatStore()"))
         XCTAssertTrue(source.contains(".environmentObject(practiceBeatStore)"))
     }
 
@@ -24214,6 +24214,7 @@ final class ReferencePackageIORoundTripTests: XCTestCase {
         case .beatManifest: return "beat/manifest.json"
         case .beatRightsReceipt: return "beat/rights_receipt.json"
         case .watchMotion: return "motion/watch.json"
+        case .phaseDVSControl: return "evidence/phase-control.wav"
         }
     }
 

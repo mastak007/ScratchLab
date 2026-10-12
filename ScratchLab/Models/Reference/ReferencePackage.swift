@@ -30,6 +30,230 @@
 
 import Foundation
 
+// MARK: - Offline derived inspection (never a canonical package)
+
+/// An immutable inspection envelope, with no take/registry/publication conversion.
+/// Schema v1 is a normalized JSON boundary; it does not run a detector or ingest media.
+/// Original reference/CSV/review artifacts remain external and are named by provenance.
+/// Offline research only: no application review, playback or publication consumer.
+struct DerivedReferenceInspectionDocument: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = "scratchlab_derived_reference_inspection_v1"
+
+    enum SourceType: String, Codable, Sendable {
+        case videoDerived, videoAudioDerived
+    }
+
+    struct Source: Codable, Equatable, Sendable {
+        /// Shared across angles and temporal windows of the SAME performance.
+        let performanceID: String
+        let sourceCollection: String
+        let sourceMKV: String
+        let sourceFolder: String
+        let cameraAngle: String
+        let videoFile: String
+        let archive: String
+        let datasetItemID: String
+        let ingestSourceType: String
+        let labelSource: String
+        let performer: String?
+        let scratchType: String
+        let bpm: Double?
+        let bpmSource: String?
+        /// Historical ingest vocabulary only; never eligibility or approval.
+        let trainingUse: String?
+    }
+
+    struct Timebase: Codable, Equatable, Sendable {
+        /// Copied from reference.json video.analysisFPS, never estimated from CSV.
+        let analysisFramesPerSecond: Double
+        let sourceStartSeconds: Double
+        let analysisDurationSeconds: Double
+        let referenceMetadataFile: String
+
+        var frameDurationSeconds: Double { 1 / analysisFramesPerSecond }
+        var frameDurationMilliseconds: Double { 1_000 / analysisFramesPerSecond }
+        func sourceSeconds(frame: Int) -> Double {
+            sourceStartSeconds + Double(frame) / analysisFramesPerSecond
+        }
+    }
+
+    struct TrajectoryProvenance: Codable, Equatable, Sendable {
+        enum Origin: String, Codable, Sendable { case videoDerived }
+        let sourceType: Origin
+        let trajectoryFile: String
+        let referenceMetadataFile: String
+        /// Names the frozen process; no claim of a known historical code hash.
+        let method: String
+        let angleConvention: String
+        let velocityConvention: String
+    }
+
+    enum Direction: String, Codable, Sendable {
+        case forward = "FORWARD", reverse = "REVERSE", still = "STILL", unknown = "UNKNOWN"
+    }
+
+    struct Sample: Codable, Equatable, Sendable {
+        let frame: Int
+        /// Verbatim serialized source timestamp; canonical time is frame + Timebase.
+        let timestampSeconds: Double
+        let angleDegrees: Double?
+        let angularVelocityDegreesPerSecond: Double?
+        let direction: Direction
+        let visualConfidence: Double
+        let interpolated: Bool
+    }
+
+    enum AudioAvailability: String, Codable, Sendable {
+        case available
+        case inactivePlatter = "inactive_platter"
+        case unavailable
+    }
+
+    struct Turnaround: Codable, Equatable, Sendable {
+        enum Change: String, Codable, Sendable {
+            case forwardToReverse = "FORWARD_TO_REVERSE"
+            case reverseToForward = "REVERSE_TO_FORWARD"
+        }
+        let frame: Int
+        let timestampSeconds: Double
+        let directionChange: Change
+        let visualConfidence: Double
+        let audioAvailability: AudioAvailability
+        let audioSupport: AudioSupport?
+    }
+
+    struct AudioSupport: Codable, Equatable, Sendable {
+        let measuredLagFields: Double
+        let measuredLagMilliseconds: Double
+        let troughRMS: Double
+        let localBaselineRMS: Double
+        /// Diagnostic ratio, not a probability; can exceed one.
+        let troughRatio: Double
+    }
+
+    struct Audio: Codable, Equatable, Sendable {
+        enum Role: String, Codable, Sendable { case noBeat }
+        enum Semantics: String, Codable, Sendable {
+            case beatRemovedProgramAudioMayIncludeSpeech = "beat_removed_program_audio_may_include_speech"
+        }
+        struct Frame: Codable, Equatable, Sendable {
+            let frame: Int
+            /// Frozen vision gate (including its recorded padding), not audio activity.
+            let visionActive: Bool
+            let availability: AudioAvailability
+            /// Retained even outside the gate, but cannot establish platter motion.
+            let rms: Double?
+            let spectralFlux: Double?
+            let motionNorm: Double?
+            var availableMotionEvidence: Double? {
+                visionActive && availability == .available ? motionNorm : nil
+            }
+        }
+        let sourceFile: String
+        let evidenceFile: String
+        let role: Role
+        let semantics: Semantics
+        let modifiesVisionTrajectory: Bool
+        let activityGateBasis: String
+        let activityPadFields: Int
+        let frames: [Frame]
+    }
+
+    /// Per-source/window diagnostics. Reported clock is retained explicitly as
+    /// noncanonical; lag milliseconds for inspection use this document's timebase.
+    struct AVLag: Codable, Equatable, Sendable {
+        let evidenceFile: String
+        let feature: String
+        let subset: String
+        let lagFields: Double
+        let pairs: Int
+        let pearson: Double
+        let spearman: Double
+        let reportedAnalysisFPS: Double
+        let modifiesVisionTrajectory: Bool
+    }
+
+    struct Review: Codable, Equatable, Sendable {
+        enum State: String, Codable, Sendable { case needsReview, approvedDerived, rejected }
+        let state: State
+        let reviewer: String?
+        let reviewedAt: Date?
+        let notes: String
+        /// Raw manual/adjudication evidence references, never canonical labels.
+        let evidenceFiles: [String]
+        /// Optional offline v1 review metadata. Absence is NOT a quality pass.
+        /// Frame bounds refer to this document's analysis frames, not source PTS.
+        let annotations: [Annotation]?
+
+        init(state: State, reviewer: String?, reviewedAt: Date?, notes: String,
+             evidenceFiles: [String], annotations: [Annotation]? = nil) {
+            self.state = state
+            self.reviewer = reviewer
+            self.reviewedAt = reviewedAt
+            self.notes = notes
+            self.evidenceFiles = evidenceFiles
+            self.annotations = annotations
+        }
+    }
+
+    struct Annotation: Codable, Equatable, Sendable {
+        enum Kind: String, Codable, Sendable { case suspect, unavailable, manualExclusion }
+        enum Reason: String, Codable, CaseIterable, Sendable {
+            case suspectedNonMarkerLock, missingVisualEvidence, handOcclusion, blendedEditTransition
+        }
+        let firstFrame: Int
+        let lastFrame: Int
+        let kind: Kind
+        let reason: Reason
+        let reviewer: String
+        let evidenceReference: String
+    }
+
+    let schemaVersion: String
+    let sourceType: SourceType
+    let hardwareGroundTruth: Bool
+    let canonicalReference: Bool
+    let source: Source
+    let timebase: Timebase
+    let trajectoryProvenance: TrajectoryProvenance
+    let samples: [Sample]
+    let turnarounds: [Turnaround]
+    let audio: Audio?
+    let avLag: [AVLag]
+    let review: Review
+
+    /// A derived review, including approvedDerived, grants no training rights.
+    var isTrainingEligible: Bool { false }
+    var requiresHumanReview: Bool { review.state == .needsReview }
+    func lagMilliseconds(_ measurement: AVLag) -> Double {
+        measurement.lagFields * timebase.frameDurationMilliseconds
+    }
+}
+
+extension DerivedReferenceInspectionDocument {
+    /// Direct Codable decoding has the same fail-closed boundary as Reference IO.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decode(String.self, forKey: .schemaVersion)
+        sourceType = try c.decode(SourceType.self, forKey: .sourceType)
+        hardwareGroundTruth = try c.decode(Bool.self, forKey: .hardwareGroundTruth)
+        canonicalReference = try c.decode(Bool.self, forKey: .canonicalReference)
+        source = try c.decode(Source.self, forKey: .source)
+        timebase = try c.decode(Timebase.self, forKey: .timebase)
+        trajectoryProvenance = try c.decode(TrajectoryProvenance.self, forKey: .trajectoryProvenance)
+        samples = try c.decode([Sample].self, forKey: .samples)
+        turnarounds = try c.decode([Turnaround].self, forKey: .turnarounds)
+        audio = try c.decodeIfPresent(Audio.self, forKey: .audio)
+        avLag = try c.decode([AVLag].self, forKey: .avLag)
+        review = try c.decode(Review.self, forKey: .review)
+        let issues = ReferenceValidator.derivedInspectionIssues(self)
+        guard issues.isEmpty else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath,
+                debugDescription: issues.joined(separator: "\n")))
+        }
+    }
+}
+
 // MARK: - Artifact records
 
 /// One file in the package.
@@ -47,6 +271,7 @@ struct ReferenceArtifactRecord: Codable, Equatable, Sendable, Identifiable {
         case referenceVideo
         case secondaryVideo
         case takeSidecar
+        case phaseDVSControl
         case rawMIDI
         case platterTimeline
         case crossfaderRaw

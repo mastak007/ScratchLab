@@ -938,6 +938,23 @@ final class ReferenceAuthoringCaptureBridge {
         let crossfaderEvents = mixerMidiEvents.filter { $0.mappedControl == "crossfader" }
         // Keep saved events/counts verbatim. Reuse the shared raw decoder only
         // for a companion provenance view, including runs lost by old filters.
+        let phaseMotion: CaptureCore.PlatterMotionEvidence?
+        do {
+            if let phase = sidecar.phaseDVSEvidence {
+                guard phase.sessionID == sidecar.sessionID, phase.takeID == sidecar.takeID,
+                      phase.deviceUID == sidecar.audioDeviceUniqueID else {
+                    throw PhaseDVSRecordingEvidence.ValidationError.invalidEvidence
+                }
+                phaseMotion = try phase.motionEvidence()
+                guard phaseMotion?.events == detectedNotation?.recordMovementEvents else {
+                    throw PhaseDVSRecordingEvidence.ValidationError.invalidEvidence
+                }
+                let rawURL = mediaURL.deletingLastPathComponent().appendingPathComponent(phase.rawControlFileName)
+                guard ReferencePackageIO.sha256Hex(try Data(contentsOf: rawURL)) == phase.rawControlSHA256 else {
+                    throw PhaseDVSRecordingEvidence.ValidationError.invalidEvidence
+                }
+            } else { phaseMotion = nil }
+        } catch { return .failure(.recordingFailed("Phase control evidence could not be verified: \(error.localizedDescription)")) }
         let platterMovementEvents = detectedNotation?.recordMovementEvents ?? []
         let mediaTimeOrigin: ReferenceMediaTimeOrigin?
         do {
@@ -973,7 +990,7 @@ final class ReferenceAuthoringCaptureBridge {
                 ),
                 watchEvidence: watchEvidence(in: sidecar, expectedIdentity: expectedIdentity),
                 platterMovementEvents: platterMovementEvents,
-                platterEvidenceIntervals: CaptureCore.derivePlatterMotionEvidence(
+                platterEvidenceIntervals: phaseMotion?.intervals ?? CaptureCore.derivePlatterMotionEvidence(
                     from: mixerMidiEvents
                 ).retaining(normalizedEvents: platterMovementEvents).intervals,
                 // Handed through VERBATIM. Whether it may seed this take's
@@ -988,7 +1005,8 @@ final class ReferenceAuthoringCaptureBridge {
                 witnessedTiming: witnessedTiming,
                 mediaTimeOrigin: mediaTimeOrigin,
                 sourceState: perTakeSourceState,
-                mixerFaderEvidence: sidecar.mixerFaderEvidence
+                mixerFaderEvidence: sidecar.mixerFaderEvidence,
+                phaseDVSEvidence: sidecar.phaseDVSEvidence
             )
         )
     }
@@ -1538,6 +1556,11 @@ final class ReferenceAuthoringCaptureBridge {
                 )
             }
 
+            let phase = engine.phaseInputSnapshot()
+            let phaseSelected = engine.phaseCapturePath == .dvsThroughDJMS9
+            let phaseReady = phase?.polarity?.deviceUID == engine.selectedAudioDeviceUniqueID
+                && phase?.error == nil && (phase?.acceptedBuffers ?? 0) > 0
+                && phase?.lastBufferHostSeconds.map { now - $0 < 2 } == true
             let cameraName = engine.availableVideoDevices
                 .first(where: { $0.uniqueID == engine.selectedVideoDeviceUniqueID })?
                 .localizedName
@@ -1551,7 +1574,7 @@ final class ReferenceAuthoringCaptureBridge {
                 crossfaderEventCount: crossfaderObservation?.eventCount ?? 0,
                 platterEventCount: platterObservation?.eventCount ?? 0,
                 platterIsMoving: platterIsMoving,
-                audioInputPeakLevel: engine.activeCaptureAudioSignalLevel.map(Double.init),
+                audioInputPeakLevel: phaseSelected ? phase?.programmePeak.map(Double.init) : engine.activeCaptureAudioSignalLevel.map(Double.init),
                 audioDeviceName: engine.availableAudioDevices
                     .first(where: { $0.uniqueID == engine.selectedAudioDeviceUniqueID })?
                     .localizedName,
@@ -1567,7 +1590,11 @@ final class ReferenceAuthoringCaptureBridge {
                 crossfaderSecondsSinceLastMessage: crossfaderAge,
                 takeScopedCrossfaderEventCount: takeScopedCrossfaderCount,
                 isRecordingTake: isRecording,
-                observedMIDIAddresses: observedAddresses
+                observedMIDIAddresses: observedAddresses,
+                phaseDVS: phaseSelected ? .init(isReady: phaseReady,
+                    detail: phase?.error ?? (phaseReady
+                        ? "Phase B control 3/4 received; forward polarity checked. Programme audio 5/6."
+                        : "Connect Phase B / S9 and complete the forward-direction check.")) : nil
             )
         }
     }
