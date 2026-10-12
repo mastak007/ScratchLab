@@ -144,6 +144,7 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
     let sourceState: ReferencePerTakeSourceState?
     let mixerFaderEvidence: ScratchMixerFaderEvidence?
     let phaseDVSEvidence: PhaseDVSRecordingEvidence?
+    let samplePlayback: RecordedPlaybackLoopTimeline?
 
     init(
         audio: ReferenceArtifactMeasurement,
@@ -169,7 +170,8 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
         mediaTimeOrigin: ReferenceMediaTimeOrigin? = nil,
         sourceState: ReferencePerTakeSourceState? = nil,
         mixerFaderEvidence: ScratchMixerFaderEvidence? = nil,
-        phaseDVSEvidence: PhaseDVSRecordingEvidence? = nil
+        phaseDVSEvidence: PhaseDVSRecordingEvidence? = nil,
+        samplePlayback: RecordedPlaybackLoopTimeline? = nil
     ) {
         self.tearEvidenceSourceBinding = tearEvidenceSourceBinding
         self.rawSidecarURL = rawSidecarURL
@@ -178,6 +180,7 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
         self.sourceState = sourceState
         self.mixerFaderEvidence = mixerFaderEvidence
         self.phaseDVSEvidence = phaseDVSEvidence
+        self.samplePlayback = samplePlayback
         self.audio = audio
         self.video = video
         self.sidecar = sidecar
@@ -945,7 +948,8 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
             crossfaderTakeStartState: artifacts.crossfaderTakeStartState,
             crossfaderTakeStartOutcome: takeStartOutcome,
             mixerFaderEvidence: artifacts.mixerFaderEvidence,
-            phaseDVSEvidence: artifacts.phaseDVSEvidence
+            phaseDVSEvidence: artifacts.phaseDVSEvidence,
+            samplePlayback: artifacts.samplePlayback
         )
 
         let report = ReferenceValidator.validate(evidence, expectation: expectation, now: now)
@@ -1638,6 +1642,10 @@ struct ReferenceAuthoringTake: Equatable, Sendable, Identifiable {
     fileprivate(set) var restoredTearProjection: ReferenceTearCanonicalProjection?
     fileprivate(set) var restoredTearPerformedLimitations: [String: [CanonicalTearComparison.UnavailableReason]]?
     fileprivate(set) var evidence: ReferenceTakeEvidence
+    /// Qualified once on construction; never decodes a sidecar during a UI tick.
+    /// Unqualified presentation data remains in `evidence` for preservation.
+    let recordedSamplePlayback: RecordedPlaybackLoopTimeline?
+    let samplePlaybackUnavailableReason: String?
     /// What automatic detection believed, shown to the operator, never
     /// written into `evidence.metadata.technique`.
     let autoDetectedTechnique: ReferenceTechnique?
@@ -1666,6 +1674,25 @@ struct ReferenceAuthoringTake: Equatable, Sendable, Identifiable {
         self.tearEvidenceSourceBinding = tearEvidenceSourceBinding
         self.rawSidecarURL = rawSidecarURL
         self.evidence = evidence
+        if let playback = evidence.samplePlayback {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            if let binding = tearEvidenceSourceBinding,
+               playback.validatesIdentity(sessionID: binding.capturedSessionID, takeID: binding.capturedTakeID),
+               (try? ReferenceTearEvidenceCodec.makeSourceBinding(rawSidecarData: binding.rawSidecarData,
+                   fileName: binding.rawSidecarFileName)) == binding,
+               let sidecar = try? decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: binding.rawSidecarData),
+               sidecar.samplePlayback == playback {
+                recordedSamplePlayback = playback
+                samplePlaybackUnavailableReason = nil
+            } else {
+                recordedSamplePlayback = nil
+                samplePlaybackUnavailableReason = "Sample loop timing does not match this recording. Recorded motion is still available."
+            }
+        } else {
+            recordedSamplePlayback = nil
+            samplePlaybackUnavailableReason = nil
+        }
         self.autoDetectedTechnique = autoDetectedTechnique
         self.latestValidation = latestValidation
         self.tearReview = tearReview

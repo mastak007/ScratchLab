@@ -273,6 +273,239 @@ final class ScratchSamplePlaybackControllerMIDIPlatterTests: XCTestCase {
         controller.testOnly_midiCoalescingTick()
     }
 
+    func testRecordedPlaybackLoopWaitsForPublicationAndKeepsMediaEpoch() throws {
+        let (controller, input) = try makeLoopContextController()
+        controller.beginRecordedPlaybackLoop(token: 1, sessionID: "session", takeID: "take", mediaStartHostTime: 1)
+        advanceLoopContext(controller, input, steps: 0, time: 1.01)
+        advanceLoopContext(controller, input, steps: 40, time: 1.03)
+        advanceLoopContext(controller, input, steps: 40, time: 1.05)
+        let timeline = try XCTUnwrap(controller.finishRecordedPlaybackLoop(token: 1, endHostTime: 1.06))
+        XCTAssertTrue(timeline.validatesIdentity(sessionID: "session", takeID: "take"))
+        XCTAssertEqual(timeline.duration, 0.06, accuracy: 1e-9)
+        XCTAssertEqual(timeline.observations.map(\.kind), [.unavailable, .sampleRestart, .position])
+        XCTAssertEqual(timeline.observations[1].time, 0.03, accuracy: 1e-9)
+        XCTAssertEqual(timeline.observations[1].positionSteps, 40)
+        XCTAssertEqual(timeline.observations[2].positionSteps, 40, "Idle retains a measured endpoint without a restart")
+    }
+
+    func testRecordedPlaybackLoopDoesNotRelabelPreTakeLoadAsRestart() throws {
+        let (controller, input) = try makeLoopContextController()
+        controller.beginRecordedPlaybackLoop(token: 1, sessionID: "s", takeID: "t", mediaStartHostTime: 1.01)
+        advanceLoopContext(controller, input, steps: 0, time: 1.02)
+        advanceLoopContext(controller, input, steps: 40, time: 1.04)
+        let timeline = try XCTUnwrap(controller.finishRecordedPlaybackLoop(token: 1, endHostTime: 1.05))
+        XCTAssertEqual(timeline.observations.map(\.kind), [.unavailable, .position])
+    }
+
+    func testRecordedPlaybackLoopCapturesActualForwardAndBackwardWraps() throws {
+        let (controller, input) = try makeLoopContextController()
+        controller.beginRecordedPlaybackLoop(token: 1, sessionID: "s", takeID: "t", mediaStartHostTime: 1)
+        advanceLoopContext(controller, input, steps: 0, time: 1.01)
+        advanceLoopContext(controller, input, steps: 40, time: 1.03)
+        let context = try XCTUnwrap(controller.currentPlaybackLoopContext())
+        let beyondLoop = Int(ceil(context.loopLengthInSteps)) + 20
+        advanceLoopContext(controller, input, steps: beyondLoop, time: 1.05)
+        advanceLoopContext(controller, input, steps: 40, time: 1.07)
+        let timeline = try XCTUnwrap(controller.finishRecordedPlaybackLoop(token: 1, endHostTime: 1.08))
+        let loops = timeline.observations.filter { $0.kind == .loop }
+        XCTAssertEqual(loops.count, 2)
+        XCTAssertEqual(loops.map(\.positionSteps), [Double(beyondLoop), 40])
+        XCTAssertEqual(loops[0].loopLengthInSteps, context.loopLengthInSteps)
+    }
+
+    func testRecordedPlaybackLoopReloadAndInputGapHaveDifferentMarkers() throws {
+        let (controller, input) = try makeLoopContextController()
+        controller.beginRecordedPlaybackLoop(token: 1, sessionID: "s", takeID: "t", mediaStartHostTime: 1.01)
+        advanceLoopContext(controller, input, steps: 0, time: 1.02)
+        advanceLoopContext(controller, input, steps: 40, time: 1.04)
+        input.metadataAvailable = false
+        advanceLoopContext(controller, input, steps: 60, time: 1.06)
+        input.metadataAvailable = true
+        input.connectionGeneration += 1
+        advanceLoopContext(controller, input, steps: 80, time: 1.08)
+        controller.testOnly_installSyntheticSample(try makeSyntheticLoopBuffer(), sampleID: "loop-context")
+        advanceLoopContext(controller, input, steps: 80, time: 1.10)
+        advanceLoopContext(controller, input, steps: 100, time: 1.12)
+        let timeline = try XCTUnwrap(controller.finishRecordedPlaybackLoop(token: 1, endHostTime: 1.13))
+        XCTAssertEqual(timeline.observations.filter { $0.kind == .sampleRestart }.count, 1,
+                       "Only a completed sample load and subsequent publication can establish restart")
+        XCTAssertEqual(timeline.observations.last?.kind, .sampleRestart)
+        XCTAssertGreaterThanOrEqual(timeline.observations.filter { $0.kind == .unavailable }.count, 3)
+        XCTAssertNotEqual(timeline.observations[1].generation, timeline.observations.last?.generation)
+    }
+
+    func testRecordedPlaybackLoopDVSAndSanitizedMotionRemainUnavailable() throws {
+        let (controller, input) = try makeLoopContextController()
+        controller.beginRecordedPlaybackLoop(token: 1, sessionID: "s", takeID: "t", mediaStartHostTime: 1.01)
+        advanceLoopContext(controller, input, steps: 0, time: 1.02)
+        advanceLoopContext(controller, input, steps: 40, time: 1.04)
+        advanceLoopContext(controller, input, steps: 60, time: 1.4)
+        controller.setDVSOwnership(active: true)
+        advanceLoopContext(controller, input, steps: 80, time: 1.42)
+        let timeline = try XCTUnwrap(controller.finishRecordedPlaybackLoop(token: 1, endHostTime: 1.43))
+        XCTAssertEqual(timeline.observations.map(\.kind), [.unavailable, .position, .unavailable])
+    }
+
+    func testRecordedPlaybackLoopDVSReloadCannotBecomeMIDIRestart() throws {
+        let (controller, input) = try makeLoopContextController()
+        controller.beginRecordedPlaybackLoop(token: 1, sessionID: "s", takeID: "t", mediaStartHostTime: 1.01)
+        controller.setDVSOwnership(active: true)
+        advanceLoopContext(controller, input, steps: 0, time: 1.02)
+        controller.testOnly_installSyntheticSample(try makeSyntheticLoopBuffer(), sampleID: "loop-context")
+        controller.setDVSOwnership(active: false)
+        advanceLoopContext(controller, input, steps: 0, time: 1.04)
+        advanceLoopContext(controller, input, steps: 40, time: 1.06)
+        let timeline = try XCTUnwrap(controller.finishRecordedPlaybackLoop(token: 1, endHostTime: 1.07))
+        XCTAssertEqual(timeline.observations.map(\.kind), [.unavailable, .position])
+    }
+
+    func testRecordedPlaybackLoopFirstStopAndTakeTokenAreAuthoritative() throws {
+        var recorder = RecordedPlaybackLoopRecorder(capacity: 10)
+        recorder.begin(token: 1, sessionID: "s", takeID: "one", at: 10)
+        recorder.close(token: 1, at: 11)
+        recorder.close(token: 1, at: 20)
+        let first = try XCTUnwrap(recorder.finish(token: 1, at: 30))
+        XCTAssertEqual(first.duration, 1)
+        XCTAssertNil(recorder.finish(token: 1, at: 31))
+        recorder.begin(token: 2, sessionID: "s", takeID: "two", at: 40)
+        recorder.begin(token: 1, sessionID: "s", takeID: "stale", at: 1)
+        recorder.close(token: 1, at: 50)
+        recorder.cancel(token: 1)
+        XCTAssertNil(recorder.finish(token: 1, at: 51))
+        let second = try XCTUnwrap(recorder.finish(token: 2, at: 42))
+        XCTAssertEqual(second.takeID, "two")
+        XCTAssertEqual(second.duration, 2)
+        recorder.cancel(token: 3)
+        recorder.begin(token: 3, sessionID: "s", takeID: "late-start", at: 50)
+        XCTAssertNil(recorder.finish(token: 3, at: 51))
+        recorder.close(token: 4, at: 61)
+        recorder.begin(token: 4, sessionID: "s", takeID: "stopped-before-start", at: 60)
+        XCTAssertNil(recorder.finish(token: 4, at: 62))
+    }
+
+    func testRecordedPlaybackLoopOverflowFailsClosedAndStopTrimsQueuedTicks() throws {
+        let context = PlaybackLoopContext(generation: 1, sampleID: "ahh", validFromTimestamp: 0,
+            anchor: .init(timestamp: 1, deviceName: "Rane ONE MKII", channel: 1, value: 64, connectionGeneration: 1),
+            phaseSteps: 10, loopLengthInSteps: 3600)
+        var recorder = RecordedPlaybackLoopRecorder(capacity: 2)
+        recorder.begin(token: 1, sessionID: "s", takeID: "overflow", at: 1)
+        recorder.append(at: 1.01, kind: .position, context: context)
+        recorder.append(at: 1.02, kind: .position, context: context)
+        let overflow = try XCTUnwrap(recorder.finish(token: 1, at: 1.03))
+        XCTAssertTrue(overflow.overflowed)
+        XCTAssertTrue(overflow.observations.isEmpty)
+        recorder.begin(token: 2, sessionID: "s", takeID: "trimmed", at: 2)
+        recorder.append(at: 2.1, kind: .position, context: context)
+        recorder.close(token: 2, at: 2.05)
+        let trimmed = try XCTUnwrap(recorder.finish(token: 2, at: 3))
+        XCTAssertFalse(trimmed.overflowed)
+        XCTAssertEqual(trimmed.observations.map(\.kind), [.unavailable])
+        XCTAssertEqual(trimmed.duration, 0.05, accuracy: 1e-9)
+    }
+
+    func testRecordedPlaybackLoopEqualTimeDiscontinuityRemainsOneUnavailableObservation() throws {
+        let context = PlaybackLoopContext(generation: 1, sampleID: "ahh", validFromTimestamp: 0,
+            anchor: .init(timestamp: 1, deviceName: "Rane ONE MKII", channel: 1, value: 64, connectionGeneration: 1),
+            phaseSteps: 10, loopLengthInSteps: 3600)
+        var recorder = RecordedPlaybackLoopRecorder(capacity: 10)
+        recorder.begin(token: 1, sessionID: "s", takeID: "t", at: 1)
+        recorder.append(at: 1, kind: .position, context: context)
+        recorder.append(at: 1.01, kind: .position, context: context)
+        recorder.append(at: 1.01, kind: .position, context: context)
+        recorder.append(at: 1.01, kind: .unavailable)
+        recorder.append(at: 1.01, kind: .position, context: context)
+        recorder.append(at: 1.02, kind: .sampleRestart, context: context)
+        recorder.append(at: 1.02, kind: .position, context: context)
+        let timeline = try XCTUnwrap(recorder.finish(token: 1, at: 1.03))
+        XCTAssertEqual(timeline.observations.map(\.kind), [.unavailable, .unavailable, .sampleRestart])
+        XCTAssertTrue(zip(timeline.observations, timeline.observations.dropFirst()).allSatisfy { $0.time < $1.time })
+    }
+
+    func testRecordedPlaybackLoopSidecarRoundTripAndLegacyAbsence() throws {
+        var sidecar = CaptureCore.LocalRecordingSidecar(sessionID: "s", takeID: "t", appLocalTakeNumber: 1,
+            recordingRole: "reference", platform: "macOS", appSurface: "capture", sourceDeviceName: "Mac",
+            startedAt: Date(timeIntervalSince1970: 10), recordingStatus: "completed",
+            mediaFileName: "take.mov", sidecarFileName: "take.json")
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let legacyData = try encoder.encode(sidecar)
+        XCTAssertNil(try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: legacyData).samplePlayback)
+        sidecar.samplePlayback = .init(version: 1, sessionID: "s", takeID: "t", duration: 1,
+            overflowed: false, observations: [.init(time: 0, kind: .unavailable,
+                sampleID: nil, generation: nil, positionSteps: nil, loopLengthInSteps: nil)])
+        let encoded = try encoder.encode(sidecar)
+        XCTAssertEqual(try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: encoded), sidecar)
+        XCTAssertEqual(sidecar.schemaVersion, CaptureCore.LocalRecordingSidecar.currentSchemaVersion)
+    }
+
+    func testRecordedPlaybackLoopSavedDraftAndSourceBindingPreservePresentationEvidence() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let media = directory.appendingPathComponent("take.mov")
+        let sidecarURL = directory.appendingPathComponent("take.json")
+        // Byte-only draft-store fixtures; no audio/rendering claim is made.
+        try Data([1, 2, 3]).write(to: media)
+        try Data([4, 5, 6]).write(to: directory.appendingPathComponent("take.wav"))
+        let playback = RecordedPlaybackLoopTimeline(version: 1, sessionID: "captured-session", takeID: "captured-take",
+            duration: 1, overflowed: false, observations: [.init(time: 0, kind: .unavailable,
+                sampleID: nil, generation: nil, positionSteps: nil, loopLengthInSteps: nil)])
+        var sidecar = CaptureCore.LocalRecordingSidecar(sessionID: "captured-session", takeID: "captured-take",
+            appLocalTakeNumber: 1, recordingRole: "reference", platform: "macOS", appSurface: "capture",
+            sourceDeviceName: "Mac", startedAt: Date(timeIntervalSince1970: 10), recordingStatus: "completed",
+            mediaFileName: "take.mov", sidecarFileName: "take.json")
+        sidecar.samplePlayback = playback
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(sidecar)
+        try data.write(to: sidecarURL)
+        let binding = try ReferenceTearEvidenceCodec.makeSourceBinding(rawSidecarData: data, fileName: "take.json")
+        let metadata = ReferenceTakeMetadata(referenceTakeID: "reference-take", authoringSessionID: "authoring-session",
+            takeNumber: 1, performerName: "Test", operatorName: "Test", technique: .babyScratch,
+            pattern: .init(id: "test", name: "Test", phraseBars: 1), bpm: 95,
+            startingPlatterDirection: .forward, faderVariant: .faderOpenThroughout, referenceVersion: 1,
+            crossfaderCalibration: nil,
+            deviceInfo: .init(platform: "macOS", appVersion: "test", controllerName: "Rane ONE MKII",
+                controllerIdentifier: "test", audioDeviceName: nil, videoDeviceName: nil, watchLinked: false),
+            recordedAt: Date(timeIntervalSince1970: 10))
+        let measurement = ReferenceArtifactMeasurement(fileName: "take.wav", exists: true, byteCount: 3)
+        let evidence = ReferenceTakeEvidence(metadata: metadata, boundaries: .init(repetitions: []),
+            audio: measurement, video: nil,
+            sidecar: .init(fileName: "take.json", exists: true, byteCount: Int64(data.count)),
+            actualMediaFileName: "take.mov", crossfaderRawSamples: [], observedCrossfaderAddress: nil,
+            platterMovementEventCount: 0, derivation: nil, samplePlayback: playback)
+        let take = ReferenceAuthoringTake(evidence: evidence, autoDetectedTechnique: nil,
+            latestValidation: ReferenceValidator.validate(evidence), tearEvidenceSourceBinding: binding,
+            rawSidecarURL: sidecarURL)
+        XCTAssertEqual(take.recordedSamplePlayback, playback)
+        let store = ReferenceDraftStore(directory: directory.appendingPathComponent("drafts"))
+        _ = try store.save(take: take, mediaURL: media, reviewNotes: "preserve")
+        let draft = try store.load(id: take.id)
+        XCTAssertEqual(draft.evidence.samplePlayback, playback)
+        XCTAssertEqual(draft.sourceBinding.rawSidecarData, data)
+        let reopened = try ReferenceAuthoringSession(reviewing: draft, operatorName: "Test")
+        XCTAssertEqual(reopened.takeInReview?.recordedSamplePlayback, playback)
+        let exported = try ReferenceTearEvidenceCodec.encode(sourceBinding: draft.sourceBinding,
+            review: draft.tearReview, projection: draft.projection)
+        let exportDocument = try ReferenceTearEvidenceCodec.decodeDocument(exported)
+        XCTAssertEqual(exportDocument.sourceBinding.rawSidecarData, data)
+
+        var mismatchedSidecar = sidecar
+        mismatchedSidecar.samplePlayback = nil
+        let wrongBinding = try ReferenceTearEvidenceCodec.makeSourceBinding(
+            rawSidecarData: encoder.encode(mismatchedSidecar), fileName: "take.json")
+        let mismatched = ReferenceAuthoringTake(evidence: evidence, autoDetectedTechnique: nil,
+            latestValidation: ReferenceValidator.validate(evidence), tearEvidenceSourceBinding: wrongBinding)
+        XCTAssertNil(mismatched.recordedSamplePlayback)
+        XCTAssertNotNil(mismatched.samplePlaybackUnavailableReason)
+        XCTAssertEqual(mismatched.evidence, evidence, "Invalid presentation association must not rewrite original evidence")
+
+        var legacyJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(evidence)) as? [String: Any])
+        legacyJSON.removeValue(forKey: "samplePlayback")
+        let legacy = try JSONDecoder().decode(ReferenceTakeEvidence.self,
+            from: JSONSerialization.data(withJSONObject: legacyJSON))
+        XCTAssertNil(legacy.samplePlayback)
+    }
+
     func testPlaybackLoopContextRequiresLoadedSampleAndPublishedMIDIMotion() throws {
         let (controller, input) = try makeLoopContextController(loaded: false)
         XCTAssertNil(controller.currentPlaybackLoopContext())

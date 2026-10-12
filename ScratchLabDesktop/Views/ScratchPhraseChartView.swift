@@ -55,6 +55,10 @@ struct ScratchPhraseChartView: View {
     /// CXL controls share the chart clock and retain separate identities.
     var mixerFaders: ScratchMixerFaderEvidence? = nil
     var showsMixerFaderLanes: Bool = false
+    /// Explicit Capture review presentation; default callers/exports are unchanged.
+    var reviewDetail: Bool = false
+    var sampleResetMarkers: [ScratchStrokeGeometry.PlaybackResetMarker] = []
+    var samplePosition: Bool = false
     /// Displayed time window for the `.captured` source. When set, the chart
     /// maps `[lowerBound, upperBound]` onto the full width instead of fitting
     /// the captured take's own `[0, maxEndTime]` span. The stacked TARGET / MY
@@ -167,7 +171,7 @@ struct ScratchPhraseChartView: View {
         let start = frame.timeRange.lowerBound
         let duration = frame.timeRange.upperBound - start
         let pps = size.width / CGFloat(duration)
-        let platterHeight = size.height * (showsMixerFaderLanes ? 0.55 : (1 - faderLaneFraction))
+        let platterHeight = size.height * (reviewDetail ? 0.76 : (showsMixerFaderLanes ? 0.55 : (1 - faderLaneFraction)))
         let style: ScratchMotionRenderer.Style = layer == .target ? .target : .performance
         drawBeatGrid(ctx: ctx, size: size, startTime: start, duration: duration, pps: pps,
                      labelBottomY: platterHeight - 2, beatsPerMinute: beatsPerMinute ?? frame.beatsPerMinute)
@@ -176,10 +180,28 @@ struct ScratchPhraseChartView: View {
                                     secondsAhead: duration)
         var platterContext = ctx
         platterContext.clip(to: Path(CGRect(origin: .zero, size: viewport.size)))
+        if reviewDetail {
+            var centre = Path()
+            centre.move(to: CGPoint(x: 0, y: platterHeight / 2))
+            centre.addLine(to: CGPoint(x: size.width, y: platterHeight / 2))
+            platterContext.stroke(centre, with: .color(.white.opacity(0.28)),
+                style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+        }
         ScratchMotionRenderer.draw(geometry.motion, in: platterContext, viewport: viewport, style: style)
-        drawUnknownIntervals(geometry.missingMotion, label: "MOTION UNKNOWN", ctx: platterContext,
+        for marker in sampleResetMarkers where frame.timeRange.contains(marker.time) {
+            let x = CGFloat(marker.time - start) * pps
+            var line = Path()
+            line.move(to: CGPoint(x: x, y: 18))
+            line.addLine(to: CGPoint(x: x, y: platterHeight - 18))
+            platterContext.stroke(line, with: .color(.orange.opacity(0.65)),
+                style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            platterContext.draw(Text(marker.kind == .loop ? "LOOP" : "CUE")
+                .font(.system(size: 8, weight: .bold)).foregroundStyle(.orange),
+                at: CGPoint(x: min(size.width - 18, max(18, x)), y: 23))
+        }
+        drawUnknownIntervals(geometry.missingMotion, label: samplePosition ? "PLAYBACK UNKNOWN" : "MOTION UNKNOWN", ctx: platterContext,
                              start: start, pps: pps, top: 16, height: max(0, platterHeight - 30))
-        ctx.draw(Text("PLATTER").font(.system(size: 10, weight: .bold, design: .monospaced))
+        ctx.draw(Text(samplePosition ? "SAMPLE POSITION" : "PLATTER").font(.system(size: 10, weight: .bold, design: .monospaced))
             .foregroundStyle(Color(white: 0.42)), at: CGPoint(x: 4, y: 3), anchor: .topLeading)
         drawLaneDivider(ctx: ctx, size: size, y: platterHeight)
 

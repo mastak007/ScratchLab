@@ -1861,7 +1861,7 @@ struct ReferenceAuthoringView: View {
         isLive: Bool = false,
         chartHeight: CGFloat? = nil
     ) -> some View {
-        let minimumChartHeight = chartHeight ?? Self.canonicalTearChartMinimumHeight
+        let minimumChartHeight = chartHeight ?? (reviewTake == nil ? Self.canonicalTearChartMinimumHeight : 300)
         let chartBPM = Double(recordedBPM ?? viewModel.bpm)
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
@@ -1941,8 +1941,7 @@ struct ReferenceAuthoringView: View {
                                     isZoomed: zoomed, sectionIndex: focus?.sectionIndex ?? 0)
                             }
                             .disabled(heightScale <= 1)
-                            Text(!zoomed ? "Whole-take scale" : fittedFrame == nil
-                                ? "No supported motion to fit" : "Full trace · fitted range")
+                            Text(!zoomed ? "Whole-take scale" : "Short detail · full trace below")
                                 .foregroundStyle(.secondary)
                         }
                         .font(.caption)
@@ -1952,34 +1951,45 @@ struct ReferenceAuthoringView: View {
                             .font(.caption).foregroundStyle(.orange)
                     }
                 }
-                ScratchPhraseChartView(
-                    source: preparedChart.map { .preparedCanonical($0) }
-                        ?? .canonical(projection.records, layer: .performance, frame: frame),
-                    bpm: chartBPM,
-                    showBeatGrid: reviewTake?.evidence.metadata.captureIntent?.isMovementCheck != true,
-                    beatTimelineOffsetSeconds: reviewTake?.evidence.metadata.mediaTimeOrigin?.recordingStartOffsetSeconds ?? 0,
-                    wrapPeriod: wrapPeriod,
-                    mixerFaders: projection.mixerFaders,
-                    showsMixerFaderLanes: true,
-                    backgroundColor: .clear
-                )
-                // Bounded, never `maxHeight: .infinity`: this card also lives
-                // inside an unbounded `ScrollView`, where `.infinity` resolves
-                // to the IDEAL height and collapses the lane — the same trap
-                // documented on `liveNotationMinimumHeight`.
-                .frame(maxWidth: .infinity)
-                .frame(height: displayHeight)
-                .clipped()
-                .overlay {
-                    if let selectedRange, !zoomed {
-                        ReferenceMotionSelectionOverlay(selectedRange: selectedRange, viewport: frame.timeRange)
-                            .allowsHitTesting(false)
+                if let take = reviewTake, zoomed {
+                    ReferenceMotionDetailView(controller: viewModel.mediaReview,
+                        takeID: take.id, initialTime: selectedRange?.lowerBound ?? fullFrame.timeRange.lowerBound,
+                        request: .init(records: projection.records, fullFrame: fullFrame,
+                            mixerFaders: projection.mixerFaders, samplePlayback: take.recordedSamplePlayback,
+                            showBeatGrid: take.evidence.metadata.captureIntent?.isMovementCheck != true,
+                            beatOffset: take.evidence.metadata.mediaTimeOrigin?.recordingStartOffsetSeconds ?? 0,
+                            unavailableReason: take.samplePlaybackUnavailableReason),
+                        height: displayHeight)
+                } else {
+                    ScratchPhraseChartView(
+                        source: preparedChart.map { .preparedCanonical($0) }
+                            ?? .canonical(projection.records, layer: .performance, frame: frame),
+                        bpm: chartBPM,
+                        showBeatGrid: reviewTake?.evidence.metadata.captureIntent?.isMovementCheck != true,
+                        beatTimelineOffsetSeconds: reviewTake?.evidence.metadata.mediaTimeOrigin?.recordingStartOffsetSeconds ?? 0,
+                        wrapPeriod: wrapPeriod,
+                        mixerFaders: projection.mixerFaders,
+                        showsMixerFaderLanes: true,
+                        backgroundColor: .clear
+                    )
+                    // Bounded, never `maxHeight: .infinity`: this card also lives
+                    // inside an unbounded `ScrollView`, where `.infinity` resolves
+                    // to the IDEAL height and collapses the lane — the same trap
+                    // documented on `liveNotationMinimumHeight`.
+                    .frame(maxWidth: .infinity)
+                    .frame(height: displayHeight)
+                    .clipped()
+                    .overlay {
+                        if let selectedRange, !zoomed {
+                            ReferenceMotionSelectionOverlay(selectedRange: selectedRange, viewport: frame.timeRange)
+                                .allowsHitTesting(false)
+                        }
                     }
-                }
-                .overlay {
-                    if let take = reviewTake {
-                        ReferenceReviewPlaybackOverlay(controller: viewModel.mediaReview,
-                            takeID: take.id, viewport: frame.timeRange)
+                    .overlay {
+                        if let take = reviewTake {
+                            ReferenceReviewPlaybackOverlay(controller: viewModel.mediaReview,
+                                takeID: take.id, viewport: frame.timeRange)
+                        }
                     }
                 }
             } else {
@@ -2786,6 +2796,193 @@ private struct ReferenceReviewPlaybackOverlay: View {
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !controller.isPlaying)) { _ in
             ScratchPhrasePlayhead(mediaTime: controller.currentPlaybackTime(for: takeID), viewport: viewport)
         }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Immutable drawing pages are prepared once off the UI thread. The playback
+/// leaf only chooses a page and moves a cursor; it never decodes capture data.
+struct ReferenceMotionDetailPages: Equatable, Sendable {
+    struct Request: Equatable, Sendable {
+        let records: [ScratchNotation.GestureRecord]
+        let fullFrame: ScratchStrokeGeometry.CanonicalFrame
+        let mixerFaders: ScratchMixerFaderEvidence?
+        let samplePlayback: RecordedPlaybackLoopTimeline?
+        let showBeatGrid: Bool
+        let beatOffset: Double
+        var unavailableReason: String? = nil
+    }
+    struct Page: Equatable, Sendable {
+        let chart: ScratchStrokeGeometry.PreparedCanonicalChart
+        let resets: [ScratchStrokeGeometry.PlaybackResetMarker]
+    }
+    let pages: [Page]
+    let overview: ScratchStrokeGeometry.PreparedCanonicalChart
+    let usesSamplePosition: Bool
+
+    static func prepare(_ request: Request) -> Self {
+        let full = request.fullFrame
+        let sample = request.samplePlayback.flatMap {
+            ScratchStrokeGeometry.samplePlaybackChart(timeline: $0, records: request.records,
+                frame: full, mixerFaders: request.mixerFaders)
+        }
+        let duration = full.timeRange.upperBound - full.timeRange.lowerBound
+        // Two beats expose individual forward/back strokes. Beatless checks use
+        // two seconds. Bound preparation for unusually long imported recordings.
+        let width = max(request.showBeatGrid ? 120 / full.beatsPerMinute : 2, max(duration / 2048, Double.leastNonzeroMagnitude))
+        var pages: [Page] = []
+        for index in 0..<Int(min(2048, ceil(duration / width))) {
+            if Task.isCancelled { break }
+            let start = full.timeRange.lowerBound + Double(index) * width
+            let end = min(start + width, full.timeRange.upperBound)
+            guard end > start else { continue }
+            if let detail = sample?.windowed(to: start...end) {
+                pages.append(.init(chart: detail.prepared, resets: detail.resets))
+            } else {
+                let frame = ReferenceMotionReviewViewport.frame(full, selectedRange: start...end,
+                    zoomed: true, records: request.records)
+                pages.append(.init(chart: .init(records: request.records, layer: .performance,
+                    frame: frame, mixerFaders: request.mixerFaders), resets: []))
+            }
+        }
+        return Self(pages: pages, overview: .init(records: request.records, layer: .performance,
+            frame: full, mixerFaders: request.mixerFaders), usesSamplePosition: sample != nil)
+    }
+
+    func pageIndex(at time: Double) -> Int {
+        guard time.isFinite, !pages.isEmpty else { return 0 }
+        // Pages are contiguous. A shared edge belongs to the next page; the
+        // final recorded endpoint remains visible on the last page.
+        var lower = 0, upper = pages.count
+        while lower < upper {
+            let middle = (lower + upper) / 2
+            if pages[middle].chart.frame.timeRange.upperBound <= time { lower = middle + 1 }
+            else { upper = middle }
+        }
+        return min(pages.count - 1, lower)
+    }
+}
+
+private struct ReferenceMotionDetailView: View {
+    @ObservedObject var controller: ReferenceFinalizedMediaReviewController
+    let takeID: String
+    let initialTime: Double
+    let request: ReferenceMotionDetailPages.Request
+    let height: CGFloat
+    @State private var prepared: ReferenceMotionDetailPages?
+    @State private var pinnedPage: Int?
+    @State private var followedPage = 0
+
+    var body: some View {
+        Group {
+            if let prepared, !prepared.pages.isEmpty {
+                let index = min(prepared.pages.count - 1, pinnedPage ?? followedPage)
+                    let page = prepared.pages[index]
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Button { pinnedPage = max(0, index - 1) } label: {
+                                Image(systemName: "chevron.left")
+                            }
+                            .accessibilityLabel("Previous scratch detail")
+                            .disabled(index == 0)
+                            Text("Detail \(page.chart.frame.timeRange.lowerBound, specifier: "%.2f")–\(page.chart.frame.timeRange.upperBound, specifier: "%.2f") s")
+                                .monospacedDigit().frame(minWidth: 145, alignment: .leading)
+                            Button { pinnedPage = min(prepared.pages.count - 1, index + 1) } label: {
+                                Image(systemName: "chevron.right")
+                            }
+                            .accessibilityLabel("Next scratch detail")
+                            .disabled(index == prepared.pages.count - 1)
+                            Spacer(minLength: 0)
+                            Toggle("Follow playhead", isOn: Binding(
+                                get: { pinnedPage == nil },
+                                set: { pinnedPage = $0 ? nil : index }))
+                                .toggleStyle(.checkbox)
+                        }
+                        .font(.caption)
+                        ScratchPhraseChartView(source: .preparedCanonical(page.chart),
+                            bpm: request.fullFrame.beatsPerMinute, showBeatGrid: request.showBeatGrid,
+                            beatTimelineOffsetSeconds: request.beatOffset,
+                            showsMixerFaderLanes: true, reviewDetail: true,
+                            sampleResetMarkers: page.resets, samplePosition: prepared.usesSamplePosition,
+                            backgroundColor: .clear)
+                            .frame(height: height)
+                            .clipped()
+                            .overlay {
+                                ReferenceReviewPlaybackOverlay(controller: controller,
+                                    takeID: takeID, viewport: page.chart.frame.timeRange)
+                            }
+                        Text(prepared.usesSamplePosition
+                            ? "Sample position · loop/cue restarts return to centre · one scale throughout"
+                            : (request.unavailableReason ?? "Local motion scale · sample restart timing unavailable"))
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Text("WHOLE TAKE · PHYSICAL MOTION")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        ScratchPhraseChartView(source: .preparedCanonical(prepared.overview),
+                            bpm: request.fullFrame.beatsPerMinute, showBeatGrid: false,
+                            showsMixerFaderLanes: true, backgroundColor: .clear)
+                            .frame(height: 76)
+                            .clipped()
+                            .overlay {
+                                ReferenceMotionSelectionOverlay(selectedRange: page.chart.frame.timeRange,
+                                    viewport: request.fullFrame.timeRange)
+                                    .allowsHitTesting(false)
+                            }
+                            .overlay {
+                                ReferenceReviewPlaybackOverlay(controller: controller,
+                                    takeID: takeID, viewport: request.fullFrame.timeRange)
+                            }
+                    }
+                    .background {
+                        ReferenceMotionPageFollower(controller: controller, takeID: takeID,
+                            initialTime: initialTime, prepared: prepared) { followedPage = $0 }
+                    }
+            } else {
+                Text("Preparing scratch detail…")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: height + 150)
+            }
+        }
+        .task(id: request) {
+            prepared = nil
+            let input = request
+            let work = Task.detached(priority: .userInitiated) { ReferenceMotionDetailPages.prepare(input) }
+            let result = await withTaskCancellationHandler(operation: { await work.value },
+                onCancel: { work.cancel() })
+            guard !Task.isCancelled else { return }
+            followedPage = result.pageIndex(at: controller.currentPlaybackTime(for: takeID) ?? initialTime)
+            prepared = result
+        }
+        .onChange(of: initialTime) { time in
+            // Explicit section/repetition navigation wins over a paused clock.
+            pinnedPage = prepared?.pageIndex(at: time)
+        }
+        .onReceive(controller.$state) { _ in
+            // Playback and completed Show start/end seeks reveal their cursor.
+            // Manual detail paging alone never changes the media clock.
+            pinnedPage = nil
+        }
+    }
+}
+
+/// Only this zero-size leaf reads the clock at display cadence. It publishes
+/// a page change at most once per boundary; static full-take geometry is never
+/// redrawn thirty times a second just to move the independent cursor overlay.
+private struct ReferenceMotionPageFollower: View {
+    @ObservedObject var controller: ReferenceFinalizedMediaReviewController
+    let takeID: String
+    let initialTime: Double
+    let prepared: ReferenceMotionDetailPages
+    let didChangePage: (Int) -> Void
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !controller.isPlaying)) { _ in
+            let index = prepared.pageIndex(at: controller.currentPlaybackTime(for: takeID) ?? initialTime)
+            Color.clear.onChange(of: index, initial: true) { _, value in didChangePage(value) }
+        }
+        .frame(width: 0, height: 0)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }

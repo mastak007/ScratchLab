@@ -504,3 +504,147 @@ final class RaneTwelvePlatterDecoder: @unchecked Sendable {
     /// Read from the control/UI queue, not the audio render callback.
     func snapshot() -> Observation? { state.withLock { $0.latest } }
 }
+
+/// Recorded direct-MIDI sample control publications, for review presentation.
+/// This is sample phase, not calibrated physical platter motion or proof of
+/// acoustic output. Missing historical evidence must never be reconstructed
+/// from the sample currently loaded in the app.
+struct RecordedPlaybackLoopTimeline: Codable, Equatable, Sendable {
+    enum Kind: String, Codable, Equatable, Sendable {
+        case position, loop, sampleRestart, unavailable
+    }
+
+    struct Observation: Codable, Equatable, Sendable {
+        let time: Double
+        let kind: Kind
+        let sampleID: String?
+        /// Changes on sample or input discontinuity, not on an ordinary loop.
+        let generation: UInt64?
+        let positionSteps: Double?
+        let loopLengthInSteps: Double?
+    }
+
+    let version: Int
+    let sessionID: String
+    let takeID: String
+    let duration: Double
+    let overflowed: Bool
+    let observations: [Observation]
+
+    func validatesIdentity(sessionID: String, takeID: String) -> Bool {
+        version == 1 && !self.sessionID.isEmpty && !self.takeID.isEmpty
+            && self.sessionID == sessionID && self.takeID == takeID
+    }
+}
+
+/// Bounded control-queue storage. Never called by the real-time audio renderer.
+/// Lifecycle tokens are monotonic and owned by the recording engine: delayed
+/// begin/close/drain callbacks cannot erase or extend a different take.
+struct RecordedPlaybackLoopRecorder {
+    static let maximumObservations = 120_000
+    private let capacity: Int
+    private var highestToken: UInt64 = 0
+    private var token: UInt64?
+    private var sessionID = ""
+    private var takeID = ""
+    private(set) var epoch: Double?
+    private var end: Double?
+    private var overflowed = false
+    private var observations: [RecordedPlaybackLoopTimeline.Observation] = []
+
+    init(capacity: Int = Self.maximumObservations) {
+        self.capacity = min(Self.maximumObservations, max(1, capacity))
+    }
+
+    mutating func begin(token: UInt64, sessionID: String, takeID: String, at epoch: Double) {
+        guard token > highestToken else { return }
+        highestToken = token
+        self.token = nil
+        self.epoch = nil
+        observations.removeAll(keepingCapacity: true)
+        observations.reserveCapacity(capacity)
+        guard epoch.isFinite, epoch >= 0, !sessionID.isEmpty, !takeID.isEmpty else { return }
+        self.token = token
+        self.sessionID = sessionID
+        self.takeID = takeID
+        self.epoch = epoch
+        end = nil
+        overflowed = false
+        append(at: epoch, kind: .unavailable)
+    }
+
+    mutating func append(at hostTime: Double, kind: RecordedPlaybackLoopTimeline.Kind,
+                         context: PlaybackLoopContext? = nil) {
+        guard token != nil, let epoch, end == nil, !overflowed,
+              hostTime.isFinite, hostTime >= epoch else { return }
+        let time = hostTime - epoch
+        guard time >= (observations.last?.time ?? 0) else { return }
+        if kind == .unavailable, observations.last?.kind == .unavailable { return }
+        if kind != .unavailable {
+            guard let context, !context.sampleID.isEmpty, context.phaseSteps.isFinite,
+                  context.loopLengthInSteps.isFinite, context.loopLengthInSteps > 0 else { return }
+        }
+        let next = RecordedPlaybackLoopTimeline.Observation(time: time, kind: kind,
+            sampleID: context?.sampleID, generation: context?.generation,
+            positionSteps: context?.phaseSteps, loopLengthInSteps: context?.loopLengthInSteps)
+        if let last = observations.last, last.time == time {
+            // A timestamp cannot order two different states. Keep a gap at
+            // that instant; a later qualified tick may restore the path.
+            // Exact duplicate polling is harmless and does not grow storage.
+            let samePosition = last.kind != .unavailable && next.kind != .unavailable
+                && last.sampleID == next.sampleID && last.generation == next.generation
+                && last.positionSteps == next.positionSteps && last.loopLengthInSteps == next.loopLengthInSteps
+            if samePosition {
+                // A second idle read must not erase an already recorded real
+                // restart/loop marker at the same endpoint.
+                if last.kind == .position { observations[observations.count - 1] = next }
+            } else if last != next {
+                observations[observations.count - 1] = .init(time: time, kind: .unavailable,
+                    sampleID: nil, generation: nil, positionSteps: nil, loopLengthInSteps: nil)
+            }
+            return
+        }
+        guard observations.count < capacity else {
+            overflowed = true
+            observations.removeAll(keepingCapacity: true)
+            return
+        }
+        observations.append(next)
+    }
+
+    mutating func close(token: UInt64, at hostTime: Double) {
+        // If Stop beats a delayed begin delivery, retire that generation;
+        // recording nothing is safer than admitting post-Stop publications.
+        highestToken = max(highestToken, token)
+        guard self.token == token, let epoch, end == nil,
+              hostTime.isFinite, hostTime >= epoch else { return }
+        end = hostTime
+        // The capture callback can arrive after a queued control tick. Retain
+        // only publications inside the first confirmed Stop boundary.
+        while let last = observations.last, last.time > hostTime - epoch {
+            observations.removeLast()
+        }
+    }
+
+    mutating func finish(token: UInt64, at hostTime: Double) -> RecordedPlaybackLoopTimeline? {
+        guard self.token == token, let epoch else { return nil }
+        close(token: token, at: hostTime)
+        guard let end else { return nil }
+        let result = RecordedPlaybackLoopTimeline(version: 1, sessionID: sessionID,
+            takeID: takeID, duration: end - epoch, overflowed: overflowed, observations: observations)
+        self.token = nil
+        self.epoch = nil
+        // Release ownership of the published array; allocate only at the next
+        // recording start, never once per tick through copy-on-write.
+        observations = []
+        return result
+    }
+
+    mutating func cancel(token: UInt64) {
+        highestToken = max(highestToken, token)
+        guard self.token == token else { return }
+        self.token = nil
+        epoch = nil
+        observations.removeAll(keepingCapacity: true)
+    }
+}

@@ -5818,6 +5818,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiTakeToken: MIDICaptureTakeToken?
     ) {
         beginMIDIRecordingWindow(at: mediaStartHostTime, token: midiTakeToken)
+        if let midiTakeToken, midiCaptureWindowTicket.takeToken == midiTakeToken,
+           let sidecar = activeRoutineRecordingSidecar {
+            scratchPlaybackController.beginRecordedPlaybackLoop(token: midiTakeToken.value,
+                sessionID: sidecar.sessionID, takeID: sidecar.takeID,
+                mediaStartHostTime: mediaStartHostTime)
+        }
         captureCrossfaderTakeStartState(
             token: token,
             mediaStartHostTime: mediaStartHostTime
@@ -9152,6 +9158,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let audioSnapshot = audioDetector?.snapshot()
             ?? ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil)
         let finalizationHostTime = CACurrentMediaTime()
+        sidecar.samplePlayback = scratchPlaybackController.finishRecordedPlaybackLoop(
+            token: midiTakeToken.value, endHostTime: finalizationHostTime)
         let motionEvents = builder?.movementEvents(now: finalizationHostTime) ?? []
         ScratchLabPerformanceSignpost.event(
             "MovementEventBuild",
@@ -13291,6 +13299,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             // Freeze the same first-close boundary used by held fader coverage.
             // Later finish callbacks cannot extend it after epoch retirement.
             midiRecordingEndHostTime = endHostTime
+            scratchPlaybackController.closeRecordedPlaybackLoop(token: token.value, endHostTime: endHostTime)
             mixerFaderRecorder.close(at: endHostTime)
             lockedSealParkedCrossfaderCoverage(token: token, at: endHostTime)
             lockedSetMIDICaptureWindow(owner: .take, epochStartHostTime: 0, takeToken: token)
@@ -13313,6 +13322,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.lock()
         let released = midiWindowOwnerStorage == .take && midiWindowTakeTokenStorage == token
         if released {
+            scratchPlaybackController.cancelRecordedPlaybackLoop(token: token.value)
             activeRoutineParkedCrossfaderCoverage = nil
             lockedClearCapturedMidiCCEvents()
             lockedSetMIDICaptureWindow(owner: .idle, epochStartHostTime: 0, takeToken: nil)

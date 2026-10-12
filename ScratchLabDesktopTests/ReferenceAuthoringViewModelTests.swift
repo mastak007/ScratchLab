@@ -5198,6 +5198,168 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
             positionRange: 0...1, coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 80))
     }
 
+    func testShortDetailSeparatesSmallScratchesFromLongTravelWithoutChangingEvidence() throws {
+        let records = [
+            motion(id: "forward", time: 0...0.5, start: 0.8, end: 0.85),
+            motion(id: "backward", time: 0.5...1, start: 0.85, end: 0.8),
+            motion(id: "ramp", time: 2...4, start: 0.8, end: 8)
+        ]
+        let full = try XCTUnwrap(ScratchStrokeGeometry.CanonicalFrame(timeRange: 0...4,
+            positionRange: 0...9, coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 120))
+        let request = ReferenceMotionDetailPages.Request(records: records, fullFrame: full,
+            mixerFaders: nil, samplePlayback: nil, showBeatGrid: true, beatOffset: 0)
+        let detail = ReferenceMotionDetailPages.prepare(request)
+        XCTAssertEqual(detail.pages.count, 4)
+        XCTAssertFalse(detail.usesSamplePosition)
+        XCTAssertTrue(detail.pages.allSatisfy { $0.resets.isEmpty })
+        XCTAssertEqual(detail.overview.frame, full)
+        XCTAssertEqual(detail.overview, .init(records: records, layer: .performance, frame: full))
+        let path = detail.pages[0].chart.geometry.motion
+        XCTAssertEqual(path.segments.count, 2)
+        XCTAssertEqual(path.segments[0].startPosition, 0.1, accuracy: 1e-10)
+        XCTAssertEqual(path.segments[0].endPosition, 0.9, accuracy: 1e-10)
+        XCTAssertEqual(path.segments[1].endPosition, 0.1, accuracy: 1e-10)
+        XCTAssertTrue(detail.pages[1].chart.geometry.motion.isEmpty)
+        XCTAssertEqual(detail.pages[1].chart.geometry.missingMotion, [1...2])
+        XCTAssertEqual(request.records, records)
+        XCTAssertEqual(detail, ReferenceMotionDetailPages.prepare(request))
+        for (time, expected) in [(-1.0, 0), (0, 0), (0.99, 0), (1, 1), (3.99, 3), (4, 3), (100, 3)] {
+            XCTAssertEqual(detail.pageIndex(at: time), expected)
+        }
+        XCTAssertEqual(detail.pageIndex(at: .nan), 0)
+    }
+
+    func testSampleDetailUsesOneScaleAndKeepsIndependentPhysicalOverview() throws {
+        let records = [motion(id: "physical", time: 0...2, start: 0, end: 20)]
+        let frame = try XCTUnwrap(ScratchStrokeGeometry.CanonicalFrame(timeRange: 0...2,
+            positionRange: -1...21, coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 120))
+        var observations: [RecordedPlaybackLoopTimeline.Observation] = []
+        for index in 0...40 {
+            let kind: RecordedPlaybackLoopTimeline.Kind
+            if index == 0 { kind = .sampleRestart }
+            else if index == 20 { kind = .loop }
+            else { kind = .position }
+            observations.append(.init(time: Double(index) / 20, kind: kind,
+                sampleID: "synthetic-control-publication", generation: 1,
+                positionSteps: Double(index), loopLengthInSteps: 20))
+        }
+        let timeline = RecordedPlaybackLoopTimeline(version: 1, sessionID: "fixture", takeID: "fixture",
+            duration: 2, overflowed: false, observations: observations)
+        let detail = ReferenceMotionDetailPages.prepare(.init(records: records, fullFrame: frame,
+            mixerFaders: nil, samplePlayback: timeline, showBeatGrid: true, beatOffset: 0))
+        XCTAssertTrue(detail.usesSamplePosition)
+        XCTAssertEqual(detail.pages.count, 2)
+        XCTAssertTrue(detail.pages.allSatisfy { $0.chart.frame.coordinateSpace == .samplePosition })
+        XCTAssertEqual(detail.pages[0].chart.frame.positionRange, detail.pages[1].chart.frame.positionRange)
+        XCTAssertEqual(detail.overview, .init(records: records, layer: .performance, frame: frame))
+        XCTAssertEqual(try XCTUnwrap(detail.pages[1].chart.geometry.motion.segments.first).startPosition, 0.5)
+        let renderer = ImageRenderer(content:
+            VStack(alignment: .leading, spacing: 8) {
+                Text("SYNTHETIC LOOP PRESENTATION TEST · NOT A RECORDED TAKE").font(.headline)
+                ForEach(Array(detail.pages.enumerated()), id: \.offset) { _, page in
+                    ScratchPhraseChartView(source: .preparedCanonical(page.chart), bpm: 120,
+                        showsMixerFaderLanes: true, reviewDetail: true,
+                        sampleResetMarkers: page.resets, samplePosition: true, backgroundColor: .clear)
+                        .frame(height: 240)
+                }
+            }
+            .foregroundStyle(.white).padding(16).frame(width: 800)
+            .background(Color.black).environment(\.colorScheme, .dark))
+        renderer.scale = 1; renderer.isOpaque = true
+        let image = try XCTUnwrap(renderer.cgImage)
+        if let directory = ProcessInfo.processInfo.environment["SL_REVIEW_PLAYHEAD_RENDER_DIRECTORY"] {
+            let url = URL(fileURLWithPath: directory, isDirectory: true)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            let png = try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+            try png.write(to: url.appendingPathComponent("synthetic-centred-loop.png"), options: .atomic)
+        }
+    }
+
+    func testBeatlessDetailKeepsTwoSecondWindowsAndClipsLastPage() throws {
+        let full = try XCTUnwrap(ScratchStrokeGeometry.CanonicalFrame(timeRange: 2...6.5,
+            positionRange: 0...1, coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 95))
+        let detail = ReferenceMotionDetailPages.prepare(.init(records: [], fullFrame: full,
+            mixerFaders: nil, samplePlayback: nil, showBeatGrid: false, beatOffset: 2.4))
+        XCTAssertEqual(detail.pages.map { $0.chart.frame.timeRange }, [2...4, 4...6, 6...6.5])
+        XCTAssertTrue(detail.pages.allSatisfy { $0.chart.geometry.motion.isEmpty })
+        XCTAssertFalse(detail.usesSamplePosition)
+    }
+
+    func testSupplied95BPMTakeDetailPreservesUnknownsAndRendersLocalScratchHeight() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let path = environment["SL_CENTRED_REVIEW_DRAFT_PATH"] ?? environment["SL_REVIEW_PLAYHEAD_EVIDENCE_PATH"] else {
+            throw XCTSkip("Supply the saved 95 BPM take or its registered corrected draft.")
+        }
+        let original = try Data(contentsOf: URL(fileURLWithPath: path))
+        let documentData: Data
+        if environment["SL_CENTRED_REVIEW_DRAFT_PATH"] != nil {
+            struct Envelope: Decodable { let payload: Data; let sha256: String }
+            let envelope = try JSONDecoder().decode(Envelope.self, from: original)
+            XCTAssertEqual(ReferencePackageIO.sha256Hex(envelope.payload), envelope.sha256)
+            let draft = try JSONDecoder().decode(ReferenceSavedDraft.self, from: envelope.payload)
+            XCTAssertEqual(draft.id, "derived-controller-3986b49c-6049-48c4-9541-6b9ab0260bbc")
+            XCTAssertEqual(draft.projection.records.count, 77)
+            documentData = try ReferenceTearEvidenceCodec.encode(sourceBinding: draft.sourceBinding,
+                review: draft.tearReview, projection: draft.projection, performedLimitations: draft.performedLimitations)
+        } else { documentData = original }
+        let document = try ReferenceTearEvidenceCodec.decodeDocument(documentData)
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self,
+            from: document.sourceBinding.rawSidecarData)
+        XCTAssertNil(sidecar.samplePlayback, "Historical sample restart timing must remain absent")
+        let full = try XCTUnwrap(ReferenceAuthoringViewModel.canonicalFrame(for: document.projection, bpm: 95))
+        let detail = ReferenceMotionDetailPages.prepare(.init(records: document.projection.records,
+            fullFrame: full, mixerFaders: document.projection.mixerFaders, samplePlayback: nil,
+            showBeatGrid: true, beatOffset: sidecar.captureTiming?.recordingStartOffsetSeconds ?? 0))
+        XCTAssertFalse(detail.usesSamplePosition)
+        XCTAssertTrue(detail.pages.allSatisfy { $0.resets.isEmpty })
+        XCTAssertGreaterThan(detail.pages.count, 10)
+        for (index, page) in detail.pages.enumerated() {
+            let oldFrame = ReferenceMotionReviewViewport.frame(full,
+                selectedRange: page.chart.frame.timeRange, zoomed: true)
+            let old = ScratchStrokeGeometry.canonicalGeometry(records: document.projection.records,
+                layer: .performance, frame: oldFrame)
+            XCTAssertEqual(page.chart.geometry.missingMotion, old.missingMotion)
+            let positions = page.chart.geometry.motion.segments.flatMap { [$0.startPosition, $0.endPosition] }
+            for position in positions {
+                XCTAssertGreaterThanOrEqual(position, 0)
+                XCTAssertLessThanOrEqual(position, 1)
+            }
+            // Keep four representative genuine saved-data detail renders. No
+            // artificial reset history is added to this old recording.
+            guard [1, 3, 8, 12].contains(index) else { continue }
+            let renderer = ImageRenderer(content:
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("SAVED 95 BPM TAKE · LOCAL SCRATCH DETAIL").font(.headline)
+                    Text("\(page.chart.frame.timeRange.lowerBound, specifier: "%.2f")–\(page.chart.frame.timeRange.upperBound, specifier: "%.2f") s · restart timing not recorded")
+                        .font(.caption)
+                    ScratchPhraseChartView(source: .preparedCanonical(page.chart), bpm: 95,
+                        beatTimelineOffsetSeconds: sidecar.captureTiming?.recordingStartOffsetSeconds ?? 0,
+                        showsMixerFaderLanes: true, reviewDetail: true, backgroundColor: .clear)
+                        .frame(height: 300)
+                    Text("WHOLE TAKE · PHYSICAL MOTION").font(.caption)
+                    ScratchPhraseChartView(source: .preparedCanonical(detail.overview), bpm: 95,
+                        showBeatGrid: false, showsMixerFaderLanes: true, backgroundColor: .clear)
+                        .frame(height: 76)
+                }
+                .foregroundStyle(.white).padding(16).frame(width: 800)
+                .background(Color.black).environment(\.colorScheme, .dark))
+            renderer.scale = 1; renderer.isOpaque = true
+            let image = try XCTUnwrap(renderer.cgImage)
+            let attachment = XCTAttachment(image: NSImage(cgImage: image,
+                size: NSSize(width: CGFloat(image.width), height: CGFloat(image.height))))
+            attachment.name = "Saved-95BPM-local-detail-\(index)"
+            attachment.lifetime = .keepAlways; add(attachment)
+            if let directory = environment["SL_REVIEW_PLAYHEAD_RENDER_DIRECTORY"] {
+                let url = URL(fileURLWithPath: directory, isDirectory: true)
+                try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+                let png = try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+                try png.write(to: url.appendingPathComponent("local-detail-\(index).png"), options: .atomic)
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), original)
+    }
+
     func testFirstRepetitionMatchesMediaOriginInsteadOfIncludingCountIn() {
         let boundary = ReferenceRepetitionBoundary(index: 0, startBeat: 4, endBeat: 8)
         XCTAssertEqual(ReferenceMotionReviewViewport.range(for: boundary, metadata: metadata(), recordedEnd: 20), 0...4)

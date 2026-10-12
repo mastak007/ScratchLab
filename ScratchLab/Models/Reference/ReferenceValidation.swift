@@ -386,6 +386,7 @@ struct ReferenceTakeEvidence: Codable, Equatable, Sendable {
     let crossfaderTakeStartOutcome: ReferenceCrossfaderTakeStart.Outcome?
     let mixerFaderEvidence: ScratchMixerFaderEvidence?
     let phaseDVSEvidence: PhaseDVSRecordingEvidence?
+    let samplePlayback: RecordedPlaybackLoopTimeline?
     /// The derivation produced from the raw samples and the calibration.
     /// `nil` when derivation could not run (unusable or absent calibration).
     let derivation: CrossfaderDerivation?
@@ -413,7 +414,8 @@ struct ReferenceTakeEvidence: Codable, Equatable, Sendable {
         crossfaderTakeStartState: CaptureCore.CrossfaderTakeStartState? = nil,
         crossfaderTakeStartOutcome: ReferenceCrossfaderTakeStart.Outcome? = nil,
         mixerFaderEvidence: ScratchMixerFaderEvidence? = nil,
-        phaseDVSEvidence: PhaseDVSRecordingEvidence? = nil
+        phaseDVSEvidence: PhaseDVSRecordingEvidence? = nil,
+        samplePlayback: RecordedPlaybackLoopTimeline? = nil
     ) {
         self.watchEvidence = watchEvidence
         self.metadata = metadata
@@ -432,6 +434,7 @@ struct ReferenceTakeEvidence: Codable, Equatable, Sendable {
         self.crossfaderTakeStartOutcome = crossfaderTakeStartOutcome
         self.mixerFaderEvidence = mixerFaderEvidence
         self.phaseDVSEvidence = phaseDVSEvidence
+        self.samplePlayback = samplePlayback
         self.derivation = derivation
     }
 }

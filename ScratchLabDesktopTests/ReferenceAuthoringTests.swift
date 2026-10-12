@@ -13,6 +13,265 @@ import AVFoundation
 import XCTest
 @testable import ScratchLab
 
+final class RecordedSamplePlaybackGeometryTests: XCTestCase {
+    private typealias Timeline = RecordedPlaybackLoopTimeline
+    private typealias Geometry = ScratchStrokeGeometry
+
+    private func point(_ time: Double, _ position: Double,
+                       kind: Timeline.Kind = .position, sample: String = "ahh",
+                       generation: UInt64 = 1, period: Double = 100) -> Timeline.Observation {
+        .init(time: time, kind: kind, sampleID: sample, generation: generation,
+              positionSteps: position, loopLengthInSteps: period)
+    }
+
+    private func unavailable(_ time: Double) -> Timeline.Observation {
+        .init(time: time, kind: .unavailable, sampleID: nil, generation: nil,
+              positionSteps: nil, loopLengthInSteps: nil)
+    }
+
+    private func timeline(_ observations: [Timeline.Observation], version: Int = 1,
+                          duration: Double = 1, overflowed: Bool = false,
+                          session: String = "session", take: String = "take") -> Timeline {
+        .init(version: version, sessionID: session, takeID: take, duration: duration,
+              overflowed: overflowed, observations: observations)
+    }
+
+    private func frame(_ range: ClosedRange<Double> = 0...1) throws -> Geometry.CanonicalFrame {
+        try XCTUnwrap(.init(timeRange: range, positionRange: -1...1,
+                           coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 95))
+    }
+
+    func testRecordedLoopsAndCueRebaseAtCentreWithoutReverseConnectors() throws {
+        let source = timeline([
+            point(0, 0), point(0.04, 25), point(0.08, 50),
+            point(0.12, 100, kind: .loop), point(0.16, 125), point(0.20, 100),
+            point(0.24, -10, kind: .loop), point(0.28, -35), point(0.32, -60),
+            point(0.36, 0, kind: .sampleRestart, generation: 2),
+            point(0.40, 25, generation: 2), point(0.44, 0, generation: 2)
+        ])
+        let chart = try XCTUnwrap(Geometry.samplePlaybackChart(timeline: source, records: [], frame: frame()))
+        let segments = chart.prepared.geometry.motion.segments
+        XCTAssertEqual(chart.centreFraction, 0.5)
+        XCTAssertEqual(chart.resets, [.init(time: 0.12, kind: .loop), .init(time: 0.24, kind: .loop),
+                                      .init(time: 0.36, kind: .sampleRestart)])
+        XCTAssertEqual(segments.count, 8)
+        for time in [0.0, 0.12, 0.24, 0.36] {
+            let segment = try XCTUnwrap(segments.first { $0.startTime == time })
+            XCTAssertEqual(segment.startPosition, 0.5, accuracy: 1e-12)
+        }
+        for reset in chart.resets {
+            XCTAssertFalse(segments.contains { $0.startTime < reset.time && $0.endTime >= reset.time },
+                           "A reset is a pen-up, never a fictitious reverse stroke")
+        }
+        XCTAssertEqual(segments.map(\.kind), [.stroke(.forward), .stroke(.forward),
+            .stroke(.forward), .stroke(.backward), .stroke(.backward), .stroke(.backward),
+            .stroke(.forward), .stroke(.backward)])
+        XCTAssertEqual(segments[0].travel, segments[2].travel, accuracy: 1e-12)
+        XCTAssertEqual(segments[0].travel, segments[4].travel, accuracy: 1e-12)
+        XCTAssertTrue(segments.allSatisfy { (0...1).contains($0.startPosition) && (0...1).contains($0.endPosition) })
+        XCTAssertEqual(chart.prepared.geometry.missingMotion, [0.32...0.36, 0.44...1],
+                       "Proven same-context loops are pen-ups, while the sample-load gap stays unknown")
+        let seam = try XCTUnwrap(chart.windowed(to: 0.09...0.11))
+        XCTAssertTrue(seam.prepared.geometry.motion.segments.isEmpty,
+                      "The known loop seam has no invented connector")
+        XCTAssertTrue(seam.prepared.geometry.missingMotion.isEmpty,
+                      "The intentional loop pen-up is not an unknown playback interval")
+    }
+
+    func testLoopMarkerCannotEraseUnavailableContextChangeOrLongGap() throws {
+        let changes: [(observations: [Timeline.Observation], gap: ClosedRange<Double>)] = [
+            ([point(0, 0), point(0.04, 10), unavailable(0.08),
+              point(0.12, 100, kind: .loop), point(0.16, 110)], 0.04...0.12),
+            ([point(0, 0), point(0.04, 10), point(0.08, 100, kind: .loop, generation: 2),
+              point(0.12, 110, generation: 2)], 0.04...0.08),
+            ([point(0, 0), point(0.04, 10), point(0.08, 100, kind: .loop, sample: "other"),
+              point(0.12, 110, sample: "other")], 0.04...0.08),
+            ([point(0, 0), point(0.04, 10), point(0.08, 100, kind: .loop, period: 200),
+              point(0.12, 110, period: 200)], 0.04...0.08),
+            ([point(0, 0), point(0.04, 10), point(0.30, 100, kind: .loop),
+              point(0.34, 110)], 0.04...0.30),
+            ([point(0, 0), point(0.04, 10), unavailable(0.08),
+              point(0.12, 0, kind: .sampleRestart, generation: 2),
+              point(0.16, 10, generation: 2)], 0.04...0.12)
+        ]
+        for change in changes {
+            let chart = try XCTUnwrap(Geometry.samplePlaybackChart(
+                timeline: timeline(change.observations), records: [], frame: frame()))
+            XCTAssertTrue(chart.prepared.geometry.missingMotion.contains(change.gap))
+            XCTAssertFalse(chart.prepared.geometry.motion.segments.contains {
+                $0.startTime < change.gap.upperBound && $0.endTime > change.gap.lowerBound
+            }, "A reset marker cannot fill a missing phase interval")
+        }
+    }
+
+    func testUnavailableContextChangeAndLongGapNeverJoinOrInventReset() throws {
+        let source = timeline([
+            point(0, 0), point(0.04, 10), unavailable(0.08),
+            point(0.12, 50), point(0.16, 60),
+            point(0.20, 200, generation: 2), point(0.24, 210, generation: 2),
+            point(0.28, -300, sample: "fresh", generation: 2),
+            point(0.32, -310, sample: "fresh", generation: 2),
+            point(0.36, 400, sample: "fresh", generation: 2, period: 200),
+            point(0.40, 420, sample: "fresh", generation: 2, period: 200),
+            point(0.70, 900, sample: "fresh", generation: 2, period: 200),
+            point(0.74, 920, sample: "fresh", generation: 2, period: 200)
+        ])
+        let chart = try XCTUnwrap(Geometry.samplePlaybackChart(timeline: source, records: [], frame: frame()))
+        let segments = chart.prepared.geometry.motion.segments
+        XCTAssertEqual(segments.count, 6)
+        XCTAssertTrue(chart.resets.isEmpty, "Recovering context is not an AHH restart")
+        XCTAssertTrue(segments.allSatisfy { $0.startPosition == 0.5 })
+        for segment in segments {
+            XCTAssertEqual(segment.travel, try XCTUnwrap(segments.first).travel, accuracy: 1e-12,
+                           "Equal travel in each sample's loop units keeps the same height")
+        }
+        XCTAssertEqual(segments.map(\.startTime), [0, 0.12, 0.20, 0.28, 0.36, 0.70])
+        XCTAssertTrue(chart.prepared.geometry.missingMotion.contains(0.04...0.12))
+        XCTAssertTrue(chart.prepared.geometry.missingMotion.contains(0.40...0.70))
+        let emptyPage = try XCTUnwrap(chart.windowed(to: 0.5...0.6))
+        XCTAssertTrue(emptyPage.prepared.geometry.motion.isEmpty)
+        XCTAssertEqual(emptyPage.prepared.geometry.missingMotion, [0.5...0.6])
+    }
+
+    func testAllWindowsRetainOneLoopUnitScaleAndClipPreparedGeometry() throws {
+        let source = timeline([
+            point(0, 0), point(0.04, 10), point(0.08, 20),
+            point(0.12, 100, kind: .loop), point(0.16, 140), point(0.20, 150)
+        ])
+        let full = try XCTUnwrap(Geometry.samplePlaybackChart(timeline: source, records: [], frame: frame()))
+        let page = try XCTUnwrap(full.windowed(to: 0.02...0.06))
+        let directlyWindowed = try XCTUnwrap(Geometry.samplePlaybackChart(
+            timeline: source, records: [], frame: frame(0.02...0.06)))
+        XCTAssertEqual(page.prepared.frame, directlyWindowed.prepared.frame,
+                       "The scale is established by the whole take, not each page")
+        XCTAssertEqual(page.prepared.layer, directlyWindowed.prepared.layer)
+        XCTAssertEqual(page.centreFraction, directlyWindowed.centreFraction)
+        XCTAssertEqual(page.resets, directlyWindowed.resets)
+        XCTAssertEqual(page.prepared.mixerSpans, directlyWindowed.prepared.mixerSpans)
+        XCTAssertEqual(page.prepared.combinedMixerSpans, directlyWindowed.prepared.combinedMixerSpans)
+        let pagedGeometry = page.prepared.geometry, directGeometry = directlyWindowed.prepared.geometry
+        XCTAssertEqual(pagedGeometry.missingMotion, directGeometry.missingMotion)
+        XCTAssertEqual(pagedGeometry.fader, directGeometry.fader)
+        XCTAssertEqual(pagedGeometry.faderEdges, directGeometry.faderEdges)
+        XCTAssertEqual(pagedGeometry.hasUnplacedEvidence, directGeometry.hasUnplacedEvidence)
+        XCTAssertEqual(pagedGeometry.motion.timeRange, directGeometry.motion.timeRange)
+        XCTAssertEqual(pagedGeometry.motion.segments.count, directGeometry.motion.segments.count)
+        for (paged, direct) in zip(pagedGeometry.motion.segments, directGeometry.motion.segments) {
+            XCTAssertEqual(paged.kind, direct.kind)
+            XCTAssertEqual(paged.startTime, direct.startTime)
+            XCTAssertEqual(paged.endTime, direct.endTime)
+            XCTAssertEqual(paged.speed, direct.speed)
+            XCTAssertEqual(paged.isGhost, direct.isGhost)
+            XCTAssertEqual(paged.evidenceStyle, direct.evidenceStyle)
+            // Paging interpolates already-normalized positions; direct
+            // construction interpolates loop units before normalization.
+            // These affine operations can differ by one floating-point ULP.
+            // Only derived display fractions use tolerance; evidence timing,
+            // structure, gaps and the take-wide scale remain exact above.
+            XCTAssertEqual(paged.startPosition, direct.startPosition, accuracy: 1e-12)
+            XCTAssertEqual(paged.endPosition, direct.endPosition, accuracy: 1e-12)
+        }
+        XCTAssertEqual(page.prepared.frame.positionRange, full.prepared.frame.positionRange)
+        XCTAssertEqual(page.prepared.geometry.motion.segments.map(\.startTime), [0.02, 0.04])
+        XCTAssertEqual(page.prepared.geometry.motion.segments.map(\.endTime), [0.04, 0.06])
+        let original = try XCTUnwrap(full.prepared.geometry.motion.segments.first)
+        let clipped = try XCTUnwrap(page.prepared.geometry.motion.segments.first)
+        XCTAssertEqual(clipped.startPosition, (original.startPosition + original.endPosition) / 2,
+                       accuracy: 1e-12)
+        XCTAssertTrue(page.resets.isEmpty)
+        XCTAssertNil(full.windowed(to: 2...3))
+        XCTAssertNil(full.windowed(to: 0.5...0.5))
+        XCTAssertNil(full.windowed(to: 0...Double.infinity))
+    }
+
+    func testPlaybackPresentationPreservesPhysicalRecordsAndIndependentFaders() throws {
+        let event = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0, endTime: 1, startPosition: 0, endPosition: 1,
+            direction: "forward", movementKind: .normalPush, speed: 1,
+            confidence: 1, source: "controller")
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: [event], platterEvidenceIntervals: [], derivation: nil,
+            referenceTakeID: "physical-reference", coordinates: .normalizedTakeLocal())
+        let originalRecords = projection.records
+        let displayFrame = try frame()
+        let binding = ScratchMixerFaderEvidence.Binding(sourceID: "mixer", connectionGeneration: 1,
+            channel: 0, controller: 7, minimum: 0, maximum: 127, inverted: false,
+            response: .init(zeroAt: 0, oneAt: 1, shape: .linear))
+        let faders = ScratchMixerFaderEvidence(version: 1, sessionID: "session", takeID: "take",
+            epoch: 0, end: 1, sealed: true, overflowed: false, observations: [
+                .init(control: .crossfader, time: 0, kind: .message, binding: binding, rawValue: 127),
+                .init(control: .crossfader, time: 0.05, kind: .message, binding: binding, rawValue: 0)
+            ])
+        let before = Geometry.PreparedCanonicalChart(records: projection.records,
+            layer: .performance, frame: displayFrame, mixerFaders: faders)
+        let chart = try XCTUnwrap(Geometry.samplePlaybackChart(
+            timeline: timeline([point(0, 0), point(0.04, 10), point(0.08, 0)]),
+            records: projection.records, frame: displayFrame, mixerFaders: faders))
+        XCTAssertEqual(projection.records, originalRecords)
+        XCTAssertEqual(before, Geometry.PreparedCanonicalChart(records: projection.records,
+            layer: .performance, frame: displayFrame, mixerFaders: faders))
+        XCTAssertNotEqual(chart.prepared.geometry.motion, before.geometry.motion)
+        XCTAssertEqual(chart.prepared.geometry.fader, before.geometry.fader)
+        XCTAssertEqual(chart.prepared.geometry.faderEdges, before.geometry.faderEdges)
+        XCTAssertEqual(chart.prepared.mixerSpans, before.mixerSpans)
+        XCTAssertEqual(chart.prepared.combinedMixerSpans, before.combinedMixerSpans)
+        let page = try XCTUnwrap(chart.windowed(to: 0.02...0.06))
+        XCTAssertEqual(page.prepared.mixerSpans?[.crossfader], [
+            .init(start: 0.02, end: 0.05, gain: 1), .init(start: 0.05, end: 0.06, gain: 0)])
+        XCTAssertTrue(chart.prepared.frame.coordinateSpace == .samplePosition)
+        XCTAssertEqual(before.frame.coordinateSpace, .normalizedTakeLocalDisplacement)
+    }
+
+    func testInvalidOrUnsupportedPlaybackHistoryFailsClosed() throws {
+        let valid = [point(0, 0), point(0.04, 10)]
+        let cases: [Timeline] = [
+            timeline(valid, version: 2), timeline(valid, duration: 0), timeline(valid, duration: .infinity),
+            timeline(valid, overflowed: true), timeline(valid, session: " "), timeline(valid, take: ""),
+            timeline([]), timeline([point(0, 0)]), timeline([unavailable(0), unavailable(0.04)]),
+            timeline([valid[1], valid[0]]), timeline([valid[0], valid[0], valid[1]]),
+            timeline([point(-0.1, 0), valid[1]]), timeline([valid[0], point(1.1, 10)]),
+            timeline([valid[0], point(.nan, 10)]), timeline([valid[0], point(0.04, .nan)]),
+            timeline([valid[0], point(0.04, 10, period: .infinity)]),
+            timeline([valid[0], point(0.04, 10, period: 0)]),
+            timeline([valid[0], point(0.04, 10, sample: "")]),
+            timeline([valid[0], .init(time: 0.04, kind: .position, sampleID: "ahh", generation: nil,
+                                    positionSteps: 10, loopLengthInSteps: 100)]),
+            timeline([point(0, -Double.greatestFiniteMagnitude), point(0.04, Double.greatestFiniteMagnitude)]),
+            timeline([point(0, 0, period: .leastNonzeroMagnitude),
+                      point(0.04, 1, period: .leastNonzeroMagnitude)]),
+            timeline([point(0, 0, period: 1e300), point(0.04, 1e-300, period: 1e300)]),
+            timeline([point(0, 0, period: 1), point(0.04, 1e308, period: 1)])
+        ]
+        for (index, source) in cases.enumerated() {
+            XCTAssertNil(Geometry.samplePlaybackChart(timeline: source, records: [], frame: try frame()),
+                         "Malformed case \(index) must not produce a plausible partial trace")
+        }
+    }
+
+    func testObservedStationaryPublicationsRemainCentredWithoutInventingMovement() throws {
+        let chart = try XCTUnwrap(Geometry.samplePlaybackChart(
+            timeline: timeline([point(0, 700), point(0.04, 700), point(0.08, 700)]),
+            records: [], frame: frame()))
+        XCTAssertEqual(chart.prepared.geometry.motion.segments.count, 2)
+        XCTAssertTrue(chart.prepared.geometry.motion.segments.allSatisfy {
+            $0.kind == .hold && $0.startPosition == 0.5 && $0.endPosition == 0.5 && $0.drawsLine
+        })
+        XCTAssertTrue(chart.resets.isEmpty)
+    }
+
+    func testPlaybackTailRemainsExplicitlyUnavailableWithinFullReviewFrame() throws {
+        let chart = try XCTUnwrap(Geometry.samplePlaybackChart(
+            timeline: timeline([point(0, 0), point(0.04, 10)], duration: 0.1),
+            records: [], frame: frame()))
+        let tail = try XCTUnwrap(chart.windowed(to: 0.5...0.8))
+        XCTAssertTrue(tail.prepared.geometry.motion.segments.isEmpty)
+        XCTAssertEqual(tail.prepared.geometry.missingMotion, [0.5...0.8])
+        XCTAssertEqual(tail.prepared.frame.coordinateSpace, .samplePosition)
+        XCTAssertEqual(tail.prepared.frame.positionRange, chart.prepared.frame.positionRange)
+        XCTAssertTrue(tail.resets.isEmpty)
+    }
+}
+
 final class DerivedReferenceInspectionTests: XCTestCase {
     private func fixtureURL(_ name: String = "baby79_test") -> URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent()

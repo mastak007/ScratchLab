@@ -1006,7 +1006,8 @@ final class ReferenceAuthoringCaptureBridge {
                 mediaTimeOrigin: mediaTimeOrigin,
                 sourceState: perTakeSourceState,
                 mixerFaderEvidence: sidecar.mixerFaderEvidence,
-                phaseDVSEvidence: sidecar.phaseDVSEvidence
+                phaseDVSEvidence: sidecar.phaseDVSEvidence,
+                samplePlayback: sidecar.samplePlayback
             )
         )
     }

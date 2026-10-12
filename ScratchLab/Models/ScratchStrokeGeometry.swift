@@ -321,6 +321,232 @@ enum ScratchStrokeGeometry {
     }
 }
 
+// MARK: - Recorded sample playback (presentation only)
+
+extension ScratchStrokeGeometry {
+    struct PlaybackResetMarker: Equatable, Sendable {
+        enum Kind: Equatable, Sendable { case loop, sampleRestart }
+        let time: Double
+        let kind: Kind
+    }
+
+    /// Separate from physical platter evidence. Positions describe recorded
+    /// software sample-control publications, expressed in sample-loop units
+    /// relative to each continuous run's origin. Only a witnessed loop/restart
+    /// receives a reset marker; acquiring or recovering context does not.
+    struct SamplePlaybackChart: Equatable, Sendable {
+        let prepared: PreparedCanonicalChart
+        let resets: [PlaybackResetMarker]
+        var centreFraction: CGFloat { 0.5 }
+
+        /// Keeps the take-wide vertical scale. Paging clips prepared geometry;
+        /// it neither scans the recording again nor changes any sample value.
+        func windowed(to range: ClosedRange<Double>) -> Self? {
+            let old = prepared.frame
+            guard range.lowerBound.isFinite, range.upperBound.isFinite,
+                  range.lowerBound < range.upperBound else { return nil }
+            let start = max(range.lowerBound, old.timeRange.lowerBound)
+            let end = min(range.upperBound, old.timeRange.upperBound)
+            guard start < end,
+                  let frame = CanonicalFrame(timeRange: start...end,
+                    positionRange: old.positionRange, coordinateSpace: old.coordinateSpace,
+                    beatsPerMinute: old.beatsPerMinute) else { return nil }
+            let bounds = frame.timeRange
+            func clipped(_ range: ClosedRange<Double>) -> ClosedRange<Double>? {
+                let lower = max(start, range.lowerBound), upper = min(end, range.upperBound)
+                return lower < upper ? lower...upper : nil
+            }
+            let geometry = prepared.geometry
+            return Self(prepared: PreparedCanonicalChart(frame: frame, layer: prepared.layer,
+                geometry: CanonicalGeometry(
+                    motion: MotionPath(segments: ScratchStrokeGeometry.sampleSegments(geometry.motion.segments, in: bounds),
+                                       timeRange: bounds),
+                    missingMotion: geometry.missingMotion.compactMap(clipped),
+                    fader: geometry.fader.compactMap { interval in
+                        clipped(interval.range).map { .init(range: $0, state: interval.state) }
+                    },
+                    faderEdges: geometry.faderEdges.filter { bounds.contains($0.time) },
+                    hasUnplacedEvidence: geometry.hasUnplacedEvidence),
+                mixerSpans: prepared.mixerSpans.map { values in
+                    values.mapValues { ScratchMixerFaderEvidence.Span.clipped($0, to: bounds) }
+                },
+                combinedMixerSpans: prepared.combinedMixerSpans.map {
+                    ScratchMixerFaderEvidence.Span.clipped($0, to: bounds)
+                }),
+                resets: resets.filter { bounds.contains($0.time) })
+        }
+    }
+
+    /// Builds a distinct sample-relative review using the playback owner's
+    /// existing signed position. No MIDI integration, loop inference, physical
+    /// gesture mutation or change to the default canonical/PNG path occurs.
+    static func samplePlaybackChart(
+        timeline: RecordedPlaybackLoopTimeline,
+        records: [ScratchNotation.GestureRecord], frame: CanonicalFrame,
+        mixerFaders: ScratchMixerFaderEvidence? = nil
+    ) -> SamplePlaybackChart? {
+        guard timeline.version == 1, !timeline.overflowed,
+              !timeline.sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !timeline.takeID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              timeline.duration.isFinite, timeline.duration > 0,
+              timeline.observations.count <= RecordedPlaybackLoopRecorder.maximumObservations else { return nil }
+
+        struct Point {
+            let time: Double
+            let sample: String
+            let generation: UInt64
+            let position: Double
+            let period: Double
+        }
+        struct Span {
+            let start: Double
+            let end: Double
+            let from: Double
+            let to: Double
+        }
+        var spans: [Span] = []
+        var supportedRanges: [ClosedRange<Double>] = []
+        var resets: [PlaybackResetMarker] = []
+        var previous: Point?
+        var previousTime: Double?
+        var origin = 0.0
+        var radius = 0.0
+        for observation in timeline.observations {
+            guard observation.time.isFinite, observation.time >= 0,
+                  observation.time <= timeline.duration,
+                  previousTime.map({ observation.time > $0 }) ?? true else { return nil }
+            previousTime = observation.time
+            if observation.kind == .unavailable {
+                previous = nil
+                continue
+            }
+            guard let sample = observation.sampleID,
+                  !sample.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let generation = observation.generation,
+                  let position = observation.positionSteps, position.isFinite,
+                  let period = observation.loopLengthInSteps, period.isFinite, period > 0 else { return nil }
+            let point = Point(time: observation.time, sample: sample, generation: generation,
+                              position: position, period: period)
+            let isReset = observation.kind == .loop || observation.kind == .sampleRestart
+            if isReset {
+                resets.append(.init(time: point.time,
+                    kind: observation.kind == .loop ? .loop : .sampleRestart))
+            }
+            let continuousContext = previous.map { before in
+                before.sample == sample && before.generation == generation && before.period == period
+                    && point.time - before.time <= 0.1
+            } ?? false
+            if let before = previous, continuousContext, observation.kind == .loop {
+                // A recorded same-context loop is an intentional display
+                // pen-up, not unavailable sample evidence. Keep the interval
+                // free of an unknown band without inventing a phase path.
+                supportedRanges.append(before.time...point.time)
+            }
+            if let before = previous, !isReset, continuousContext {
+                let fromOffset = before.position - origin, toOffset = position - origin
+                let from = fromOffset / period, to = toOffset / period
+                guard from.isFinite, to.isFinite, (to - from).isFinite,
+                      fromOffset == 0 || from != 0,
+                      toOffset == 0 || to != 0 else { return nil }
+                spans.append(Span(start: before.time, end: point.time, from: from, to: to))
+                supportedRanges.append(before.time...point.time)
+                radius = max(radius, max(abs(from), abs(to)))
+            } else {
+                // A pen-up at a witnessed reset or an evidence discontinuity.
+                // The first subsequent segment starts at the centre; no line
+                // falsely describes the reset as a reverse platter movement.
+                origin = position
+            }
+            previous = point
+        }
+        guard !spans.isEmpty else { return nil }
+        let extent = radius > 0 ? radius * 1.125 : 0.5
+        guard extent.isFinite, extent > 0, (extent * 2).isFinite,
+              let sampleFrame = CanonicalFrame(timeRange: frame.timeRange,
+                positionRange: -extent...extent, coordinateSpace: .samplePosition,
+                beatsPerMinute: frame.beatsPerMinute) else { return nil }
+        // Canonical records supply only independent fader evidence here.
+        // Their physical path and unknown regions remain in the overview.
+        let original = PreparedCanonicalChart(records: records, layer: .performance,
+                                              frame: frame, mixerFaders: mixerFaders)
+        var motion: [MotionSegment] = []
+        var faderIndex = 0
+        for span in spans where span.end > frame.timeRange.lowerBound && span.start < frame.timeRange.upperBound {
+            let start = max(span.start, frame.timeRange.lowerBound)
+            let end = min(span.end, frame.timeRange.upperBound)
+            while faderIndex < original.geometry.fader.count,
+                  original.geometry.fader[faderIndex].range.upperBound <= start { faderIndex += 1 }
+            var index = faderIndex
+            var cursor = start
+            while cursor < end {
+                let rail = index < original.geometry.fader.count ? original.geometry.fader[index] : nil
+                let stop = min(end, rail?.range.upperBound ?? end)
+                guard stop > cursor else { return nil }
+                func fraction(at time: Double) -> CGFloat {
+                    let value = span.from + (span.to - span.from) * ((time - span.start) / (span.end - span.start))
+                    return CGFloat(0.5 + value / (extent * 2))
+                }
+                let from = fraction(at: cursor), to = fraction(at: stop)
+                guard from.isFinite, to.isFinite else { return nil }
+                let style: MotionSegment.EvidenceStyle
+                switch rail?.state {
+                case .open: style = .open
+                case .closed: style = .closed
+                case nil: style = .unknownFader
+                }
+                motion.append(MotionSegment(kind: span.to == span.from ? .hold
+                    : .stroke(span.to > span.from ? .forward : .backward),
+                    startTime: cursor, endTime: stop, startPosition: from, endPosition: to,
+                    speed: .medium, isGhost: false, evidenceStyle: style))
+                cursor = stop
+                index += 1
+            }
+        }
+        var missing: [ClosedRange<Double>] = []
+        var cursor = frame.timeRange.lowerBound
+        for range in supportedRanges where range.upperBound > frame.timeRange.lowerBound
+            && range.lowerBound < frame.timeRange.upperBound {
+            let start = max(range.lowerBound, frame.timeRange.lowerBound)
+            let end = min(range.upperBound, frame.timeRange.upperBound)
+            if start > cursor { missing.append(cursor...start) }
+            cursor = end
+        }
+        if cursor < frame.timeRange.upperBound { missing.append(cursor...frame.timeRange.upperBound) }
+        return SamplePlaybackChart(prepared: PreparedCanonicalChart(frame: sampleFrame, layer: .performance,
+            geometry: CanonicalGeometry(motion: MotionPath(segments: motion, timeRange: frame.timeRange),
+                missingMotion: missing, fader: original.geometry.fader,
+                faderEdges: original.geometry.faderEdges,
+                hasUnplacedEvidence: original.geometry.hasUnplacedEvidence),
+            mixerSpans: original.mixerSpans, combinedMixerSpans: original.combinedMixerSpans),
+            resets: resets.filter { frame.timeRange.contains($0.time) })
+    }
+
+    private static func sampleSegments(_ segments: [MotionSegment],
+                                       in range: ClosedRange<Double>) -> [MotionSegment] {
+        var low = 0, high = segments.count
+        while low < high {
+            let middle = low + (high - low) / 2
+            if segments[middle].endTime <= range.lowerBound { low = middle + 1 }
+            else { high = middle }
+        }
+        var result: [MotionSegment] = []
+        while low < segments.count, segments[low].startTime < range.upperBound {
+            let segment = segments[low]
+            let start = max(segment.startTime, range.lowerBound)
+            let end = min(segment.endTime, range.upperBound)
+            func position(at time: Double) -> CGFloat {
+                segment.startPosition + (segment.endPosition - segment.startPosition)
+                    * CGFloat((time - segment.startTime) / (segment.endTime - segment.startTime))
+            }
+            result.append(MotionSegment(kind: segment.kind, startTime: start, endTime: end,
+                startPosition: position(at: start), endPosition: position(at: end),
+                speed: segment.speed, isGhost: segment.isGhost, evidenceStyle: segment.evidenceStyle))
+            low += 1
+        }
+        return result
+    }
+}
+
 // MARK: - Canonical evidence projection (same MotionPath and renderer)
 
 extension ScratchStrokeGeometry {
@@ -534,6 +760,17 @@ extension ScratchStrokeGeometry {
                 })
             }
             combinedMixerSpans = mixerFaders?.combinedSpans(in: frame.timeRange)
+        }
+
+        fileprivate init(frame: CanonicalFrame, layer: CanonicalLayer,
+                         geometry: CanonicalGeometry,
+                         mixerSpans: [ScratchMixerFaderEvidence.Control: [ScratchMixerFaderEvidence.Span]]?,
+                         combinedMixerSpans: [ScratchMixerFaderEvidence.Span]?) {
+            self.frame = frame
+            self.layer = layer
+            self.geometry = geometry
+            self.mixerSpans = mixerSpans
+            self.combinedMixerSpans = combinedMixerSpans
         }
     }
 

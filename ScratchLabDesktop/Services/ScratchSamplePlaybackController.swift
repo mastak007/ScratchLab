@@ -517,6 +517,7 @@ final class ScratchSamplePlaybackController {
         didSet {
             guard oldValue != midiUsesContinuousRenderer else { return }
             runSynchronouslyOnAudioQueue {
+                pendingRecordedSampleRestart = false
                 invalidatePlaybackLoopContext(at: schedulingClock())
                 minimumRenderPositionEpoch = dvsContinuousRenderer.currentControlEpoch &+ 1
             }
@@ -593,7 +594,53 @@ final class ScratchSamplePlaybackController {
     private var playbackLoopValidFrom: Double = 0
     private var playbackLoopInput: MIDIPlatterInputIdentity?
 
+    private var playbackLoopRecorder = RecordedPlaybackLoopRecorder()
+    private var recordedPlaybackLoadedGeneration: UInt64?
+    private var recordedPlaybackLoadedAt: Double?
+    private var pendingRecordedSampleRestart = false
+
+    func beginRecordedPlaybackLoop(token: UInt64, sessionID: String, takeID: String, mediaStartHostTime: Double) {
+        audioQueue.async { [weak self] in
+            self?.playbackLoopRecorder.begin(token: token, sessionID: sessionID,
+                takeID: takeID, at: mediaStartHostTime)
+        }
+    }
+
+    func closeRecordedPlaybackLoop(token: UInt64, endHostTime: Double) {
+        audioQueue.async { [weak self] in
+            self?.playbackLoopRecorder.close(token: token, at: endHostTime)
+        }
+    }
+
+    func finishRecordedPlaybackLoop(token: UInt64, endHostTime: Double) -> RecordedPlaybackLoopTimeline? {
+        readOnAudioQueue { playbackLoopRecorder.finish(token: token, at: endHostTime) }
+    }
+
+    func cancelRecordedPlaybackLoop(token: UInt64) {
+        audioQueue.async { [weak self] in self?.playbackLoopRecorder.cancel(token: token) }
+    }
+
+    private func recordPlaybackLoopPublication(at timestamp: Double, loopWrapped: Bool = false) {
+        guard let context = playbackLoopContext, midiUsesContinuousRenderer,
+              !dvsOwnershipActive, platterRenderOwner == .midi,
+              context.sampleID == loadedSampleID,
+              context.generation == playbackLoopGeneration,
+              loadedRenderSampleIdentity != nil,
+              dvsContinuousRenderer.currentControlEpoch >= minimumRenderPositionEpoch,
+              let generation = recordedPlaybackLoadedGeneration, ownsLoad(generation)
+        else {
+            playbackLoopRecorder.append(at: timestamp, kind: .unavailable)
+            return
+        }
+        let restartedDuringTake = pendingRecordedSampleRestart
+            && recordedPlaybackLoadedAt.map { $0 >= (playbackLoopRecorder.epoch ?? .infinity) } == true
+        playbackLoopRecorder.append(at: timestamp,
+            kind: restartedDuringTake ? .sampleRestart : (loopWrapped ? .loop : .position), context: context)
+        pendingRecordedSampleRestart = false
+    }
+
     private func invalidatePlaybackLoopContext(at timestamp: Double) {
+        playbackLoopRecorder.append(at: timestamp, kind: .unavailable)
         playbackLoopGeneration &+= 1
         playbackLoopContext = nil
         playbackLoopInput = nil
@@ -710,6 +757,9 @@ final class ScratchSamplePlaybackController {
         // re-run the handoff side effects below.
         guard dvsOwnershipActive != active else { return }
         dvsOwnershipActive = active
+        // DVS can change phase without direct-MIDI sample-loop evidence.
+        // A later return to MIDI must not label that handoff as a cue.
+        pendingRecordedSampleRestart = false
         invalidatePlaybackLoopContext(at: schedulingClock())
 
         if active {
@@ -780,14 +830,20 @@ final class ScratchSamplePlaybackController {
               !dvsOwnershipActive,
               let provider = rightDeckAccumulatedStepsProvider,
               let forward = forwardBuffer
-        else { return }
+        else {
+            playbackLoopRecorder.append(at: schedulingClock(), kind: .unavailable)
+            return
+        }
 
         // Arbitrary-length hot-cue playback (2026-08-13): the direct-MIDI
         // continuous path drives any loaded sample at real-vinyl-RPM
         // pitch/speed (`midiFramesPerStep`, unchanged), wrapping at
         // `hotCueLoopFrames` — see that property's doc comment. Guard only
         // against a not-yet-installed/zero-length sample.
-        guard hotCueLoopFrames > 0, forward.frameLength > 0 else { return }
+        guard hotCueLoopFrames > 0, forward.frameLength > 0 else {
+            playbackLoopRecorder.append(at: schedulingClock(), kind: .unavailable)
+            return
+        }
 
         let now = schedulingClock()
         // Preserve the existing scalar read and playback computation. A
@@ -814,6 +870,7 @@ final class ScratchSamplePlaybackController {
         if requiresCorrelation, observation == nil {
             midiContinuousDrive.reset()
             playbackLoopContext = nil
+            playbackLoopRecorder.append(at: now, kind: .unavailable)
             midiContinuousWasActive = false
             dvsContinuousRenderer.publishIdle()
             return
@@ -831,6 +888,7 @@ final class ScratchSamplePlaybackController {
             // A lost correlation does not establish a new sample/input origin.
             // The next matching publication can restore the same affine map.
             playbackLoopContext = nil
+            playbackLoopRecorder.append(at: now, kind: .unavailable)
         }
         guard let result = midiContinuousDrive.tick(accumulatedSteps: steps, now: now) else {
             return // Priming: baseline captured, nothing to publish yet.
@@ -884,6 +942,9 @@ final class ScratchSamplePlaybackController {
                 }()
                 dvsContinuousRenderer.publishIdle(midiAnchor: idleAnchor)
             }
+            // Hold the last genuinely published phase only while the exact
+            // input/sample correspondence survives; gaps never become lines.
+            recordPlaybackLoopPublication(at: now)
             return
         }
 
@@ -956,6 +1017,7 @@ final class ScratchSamplePlaybackController {
                 )
             }
         }
+        recordPlaybackLoopPublication(at: now, loopWrapped: loopWrapped)
     }
 
 #if DEBUG
@@ -2864,6 +2926,9 @@ final class ScratchSamplePlaybackController {
             initialPhase: Double(hotCueOnsetFrame)
         )
         loadedRenderSampleIdentity = installed ? dvsContinuousRenderer.currentInstalledSampleIdentity : nil
+        recordedPlaybackLoadedGeneration = installed ? generation : nil
+        recordedPlaybackLoadedAt = installed ? schedulingClock() : nil
+        pendingRecordedSampleRestart = installed && !dvsOwnershipActive && midiUsesContinuousRenderer
         #if DEBUG
         print("[HotCueTrace] gen=\(generation) installSample returned · sampleID=\(sampleID) " +
               "installedSampleCount=\(dvsContinuousRenderer.installedSampleCount)")

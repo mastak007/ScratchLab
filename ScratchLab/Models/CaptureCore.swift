@@ -12484,6 +12484,8 @@ enum CaptureCore {
         var mixerFaderEvidence: ScratchMixerFaderEvidence? = nil
         /// Present only for an explicitly configured, independently recorded DVS source.
         var phaseDVSEvidence: PhaseDVSRecordingEvidence? = nil
+        /// Sample-control presentation evidence. Absent for historical takes.
+        var samplePlayback: RecordedPlaybackLoopTimeline? = nil
         var secondaryCamera: SecondaryCameraEvidence?
         var auditTrail: [CaptureAuditEvent]
 
