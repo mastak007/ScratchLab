@@ -350,6 +350,145 @@ extension ScratchStrokeGeometry {
             self.coordinateSpace = coordinateSpace
             self.beatsPerMinute = beatsPerMinute
         }
+
+        /// Explicit review framing only. Fit one vertical range to supported
+        /// motion inside the current time window, preserving every raw point
+        /// and the shared timing/coordinate unit. Comparison rows keep their
+        /// supplied frame unless a caller deliberately requests this view.
+        func fittingVisibleMotion(in records: [ScratchNotation.GestureRecord],
+                                  layer: CanonicalLayer) -> CanonicalFrame {
+            fittedVisibleMotionFrame(in: records, layer: layer) ?? self
+        }
+
+        /// Nil means no unambiguous visible evidence can establish a fitted
+        /// range. Review controls must not imply zoomable motion in that case.
+        func fittedVisibleMotionFrame(in records: [ScratchNotation.GestureRecord],
+                                      layer: CanonicalLayer) -> CanonicalFrame? {
+            typealias Record = ScratchNotation.GestureRecord
+            let originalSpan = positionRange.upperBound - positionRange.lowerBound
+            var lower = Double.infinity
+            var upper = -Double.infinity
+            var candidates: [ClosedRange<Double>] = []
+            var invalid: [ClosedRange<Double>] = []
+
+            func include(_ position: Double) {
+                lower = min(lower, position)
+                upper = max(upper, position)
+            }
+            func usablePosition(_ position: Double) -> Bool {
+                position.isFinite && ((position - positionRange.lowerBound) / originalSpan).isFinite
+            }
+            func bounded(_ span: Record.TimeSpan, scale: Double) -> ClosedRange<Double>? {
+                let start = span.startTime * scale, end = span.endTime * scale
+                guard start.isFinite, end.isFinite, start >= 0, end > start else { return nil }
+                return start...end
+            }
+            func visible(_ range: ClosedRange<Double>) -> ClosedRange<Double>? {
+                let start = max(range.lowerBound, timeRange.lowerBound)
+                let end = min(range.upperBound, timeRange.upperBound)
+                return end > start ? start...end : nil
+            }
+            func invalidate(_ range: ClosedRange<Double>) {
+                if let range = visible(range) { invalid.append(range) }
+            }
+
+            // Match the renderer's motion validity rules without rebuilding
+            // its full fader/motion partition just to choose a viewport.
+            for record in records {
+                let scale = record.timingDomain == .beats ? 60 / beatsPerMinute : 1
+                let ranges = (record.subdivisions.map(\.span) + record.internalHolds.map(\.span))
+                    .compactMap { bounded($0, scale: scale) }
+                let recordRange: ClosedRange<Double>
+                if let start = ranges.map(\.lowerBound).min(), let end = ranges.map(\.upperBound).max() {
+                    recordRange = start...end
+                } else {
+                    recordRange = timeRange
+                }
+                guard record.coordinateSpace == coordinateSpace,
+                      record.motionValidationIssues().isEmpty else {
+                    invalidate(recordRange); continue
+                }
+                for subdivision in record.subdivisions {
+                    guard let range = bounded(subdivision.span, scale: scale) else {
+                        invalidate(recordRange); continue
+                    }
+                    let curve = layer == .target ? subdivision.targetCurve : subdivision.measuredCurve
+                    guard let curve, Record.evidenceIssues(curve.evidence, platter: true).isEmpty,
+                          let first = curve.startPosition, let last = curve.endPosition else {
+                        invalidate(range); continue
+                    }
+                    let displacement = last - first
+                    guard displacement.isFinite,
+                          record.direction == .forward ? displacement > 0 : displacement < 0,
+                          zip(curve.points, curve.points.dropFirst()).allSatisfy({ a, b in
+                        let delta = b.position - a.position
+                        return delta.isFinite && (record.direction == .forward ? delta >= 0 : delta <= 0)
+                            && usablePosition(a.position) && usablePosition(b.position)
+                            && (a.time * scale).isFinite && (b.time * scale).isFinite
+                    }) else { invalidate(range); continue }
+                    for (a, b) in zip(curve.points, curve.points.dropFirst()) {
+                        let start = a.time * scale, end = b.time * scale
+                        guard let pair = bounded(.init(startTime: a.time, endTime: b.time), scale: scale),
+                              let visiblePair = visible(pair) else { continue }
+                        let duration = end - start
+                        guard duration.isFinite, duration > 0 else { return nil }
+                        let delta = b.position - a.position
+                        let startPosition = a.position + delta * ((visiblePair.lowerBound - start) / duration)
+                        let endPosition = a.position + delta * ((visiblePair.upperBound - start) / duration)
+                        guard startPosition.isFinite, endPosition.isFinite else { return nil }
+                        candidates.append(visiblePair)
+                        include(startPosition)
+                        include(endPosition)
+                    }
+                }
+                for hold in record.internalHolds {
+                    guard let range = bounded(hold.span, scale: scale) else {
+                        invalidate(recordRange); continue
+                    }
+                    guard Record.evidenceIssues(hold.evidence, platter: true).isEmpty,
+                          let position = hold.position, usablePosition(position) else {
+                        invalidate(range); continue
+                    }
+                    guard let visibleHold = visible(range) else { continue }
+                    candidates.append(visibleHold)
+                    include(position)
+                }
+            }
+
+            // An overlapping curve or invalid interval is UNKNOWN in the
+            // renderer. Conservatively retain the original scale for the
+            // whole window instead of fitting any of those invisible points.
+            // Sorting once keeps this check O(n log n), not a chart partition.
+            candidates.sort { $0.lowerBound < $1.lowerBound }
+            invalid.sort { $0.lowerBound < $1.lowerBound }
+            var previousEnd = -Double.infinity
+            var invalidIndex = 0
+            for candidate in candidates {
+                guard candidate.lowerBound >= previousEnd else { return nil }
+                previousEnd = candidate.upperBound
+                while invalidIndex < invalid.count,
+                      invalid[invalidIndex].upperBound <= candidate.lowerBound {
+                    invalidIndex += 1
+                }
+                if invalidIndex < invalid.count,
+                   invalid[invalidIndex].lowerBound < candidate.upperBound {
+                    return nil
+                }
+            }
+
+            guard lower.isFinite, upper.isFinite else { return nil }
+            let span = upper - lower
+            guard span.isFinite else { return nil }
+            // Flat, explicitly observed holds still get a usable centered
+            // viewport; absent motion never manufactures a zero baseline.
+            let padding = span > 0 ? span * 0.125
+                : max(originalSpan * 0.005, max(abs(lower) * 1e-9, 1e-9))
+            let fittedLower = lower - padding, fittedUpper = upper + padding
+            guard fittedLower.isFinite, fittedUpper.isFinite,
+                  fittedUpper > fittedLower else { return nil }
+            return CanonicalFrame(timeRange: timeRange, positionRange: fittedLower...fittedUpper,
+                                  coordinateSpace: coordinateSpace, beatsPerMinute: beatsPerMinute)
+        }
     }
 
     struct CanonicalFaderInterval: Equatable, Sendable {

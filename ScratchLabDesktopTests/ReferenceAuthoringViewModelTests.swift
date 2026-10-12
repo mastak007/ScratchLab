@@ -3,6 +3,8 @@
 
 import XCTest
 import AVFoundation
+import AppKit
+import SwiftUI
 @testable import ScratchLab
 
 /// Real-file mux regression coverage; no capture devices or playback are used.
@@ -5082,6 +5084,8 @@ final class ReferenceAuthoringCalibrationReuseAndExportTests: XCTestCase {
 
 @MainActor
 final class ReferenceMotionReviewViewportTests: XCTestCase {
+    private typealias Record = ScratchNotation.GestureRecord
+
     private func metadata(offset: Double = 4) -> ReferenceTakeMetadata {
         ReferenceTakeMetadata(referenceTakeID: "motion-review", authoringSessionID: "review", takeNumber: 1,
             performerName: "Fixture DJ",
@@ -5093,6 +5097,38 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
             deviceInfo: .init(platform: "fixture", appVersion: "1", controllerName: "fixture",
                 controllerIdentifier: "fixture", audioDeviceName: nil, videoDeviceName: nil, watchLinked: false),
             recordedAt: Date(timeIntervalSince1970: 0))
+    }
+
+    private func motion(id: String, time: ClosedRange<Double>, start: Double, end: Double) -> Record {
+        let evidence = Record.Evidence(provenance: .measured,
+            observation: ScratchNotationEvidence(source: .platterTimeline, confidence: 0.95,
+                reason: "viewport_fixture", rawSampleCount: 2))
+        return Record(id: id, direction: end > start ? .forward : .backward,
+            timingDomain: .seconds, coordinateSpace: .normalizedTakeLocalDisplacement,
+            evidence: evidence, subdivisions: [
+                .init(id: "\(id)-motion", span: .init(startTime: time.lowerBound, endTime: time.upperBound),
+                    evidence: evidence, measuredCurve: .init(points: [
+                        .init(time: time.lowerBound, position: start),
+                        .init(time: time.upperBound, position: end)
+                    ], evidence: evidence))
+            ])
+    }
+
+    /// The supplied take's late-band bounds, expressed as a synthetic pair of
+    /// strokes. This verifies presentation framing, not physical trajectory.
+    private func lateBandRecords() -> [Record] {
+        [
+            motion(id: "early", time: 0...2, start: 0, end: 1),
+            motion(id: "late-forward", time: 12...13.5,
+                start: 0.8180188256387271, end: 0.9921559838637383),
+            motion(id: "late-backward", time: 13.5...15.135147,
+                start: 0.9921559838637383, end: 0.8180188256387271)
+        ]
+    }
+
+    private func fullFrame() throws -> ScratchStrokeGeometry.CanonicalFrame {
+        try XCTUnwrap(ScratchStrokeGeometry.CanonicalFrame(timeRange: 0...15.135147,
+            positionRange: 0...1, coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 80))
     }
 
     func testFirstRepetitionMatchesMediaOriginInsteadOfIncludingCountIn() {
@@ -5121,6 +5157,160 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
         XCTAssertEqual(zoom.beatsPerMinute, full.beatsPerMinute)
         XCTAssertEqual(ReferenceMotionReviewViewport.frame(full, selectedRange: 8...12, zoomed: false), full)
         XCTAssertEqual(ReferenceMotionReviewViewport.frame(full, selectedRange: nil, zoomed: true), full)
+    }
+
+    func testLateTakeSectionFillsTheLaneWithoutChangingSavedPositions() throws {
+        let full = try fullFrame()
+        let records = lateBandRecords()
+        let original = try JSONEncoder().encode(records)
+        let fitted = ReferenceMotionReviewViewport.frame(full, selectedRange: 12...15.135147,
+            zoomed: true, records: records)
+        let geometry = ScratchStrokeGeometry.canonicalGeometry(records: records, layer: .performance, frame: fitted)
+        let positions = geometry.motion.segments.flatMap { [$0.startPosition, $0.endPosition] }
+
+        XCTAssertEqual(fitted.timeRange, 12...15.135147)
+        XCTAssertEqual(fitted.coordinateSpace, full.coordinateSpace)
+        XCTAssertEqual(fitted.beatsPerMinute, 80)
+        XCTAssertEqual(try XCTUnwrap(positions.min()), 0.1, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(positions.max()), 0.9, accuracy: 1e-12)
+        XCTAssertEqual(try JSONDecoder().decode([Record].self, from: original), records)
+        XCTAssertEqual(full.positionRange, 0...1)
+    }
+
+    func testLateBandChartRendersBeforeAndAfterWithSharedRenderer() throws {
+        let full = try fullFrame()
+        let records = lateBandRecords()
+        let before = try XCTUnwrap(ScratchStrokeGeometry.CanonicalFrame(timeRange: 12...15.135147,
+            positionRange: full.positionRange, coordinateSpace: full.coordinateSpace, beatsPerMinute: 80))
+        let after = ReferenceMotionReviewViewport.frame(full, selectedRange: before.timeRange,
+            zoomed: true, records: records)
+        let renderer = ImageRenderer(content:
+            VStack(alignment: .leading, spacing: 10) {
+                Text("SYNTHETIC VIEWPORT REGRESSION — NOT A PHYSICAL TAKE")
+                    .font(.system(size: 14, weight: .bold))
+                Text("Same 12.000–15.135 s section and curve points in both charts")
+                    .font(.caption)
+                Text("Before: whole-take vertical scale").font(.headline)
+                ScratchPhraseChartView(source: .canonical(records, layer: .performance, frame: before),
+                    bpm: 80, showBeatGrid: false, showsMixerFaderLanes: true, backgroundColor: .clear)
+                    .frame(height: 240)
+                Text("After: section fitted and centred").font(.headline)
+                ScratchPhraseChartView(source: .canonical(records, layer: .performance, frame: after),
+                    bpm: 80, showBeatGrid: false, showsMixerFaderLanes: true, backgroundColor: .clear)
+                    .frame(height: 240)
+            }
+            .foregroundStyle(.white)
+            .padding(16)
+            .frame(width: 800, height: 620, alignment: .topLeading)
+            .background(Color.black)
+            .environment(\.colorScheme, .dark))
+        renderer.scale = 1
+        renderer.isOpaque = true
+        let image = try XCTUnwrap(renderer.cgImage, "The existing chart must produce a reviewable image")
+        XCTAssertEqual(image.width, 800)
+        XCTAssertEqual(image.height, 620)
+        let attachment = XCTAttachment(image: NSImage(cgImage: image,
+            size: NSSize(width: CGFloat(image.width), height: CGFloat(image.height))))
+        attachment.name = "Synthetic late-band framing before and after — shared canonical renderer"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    func testRepeatedReviewFramingIsStableAndWholeTakeRestoresOriginalFrame() throws {
+        let full = try fullFrame()
+        let records = lateBandRecords()
+        let fitted = ReferenceMotionReviewViewport.frame(full, selectedRange: 12...15.135147,
+            zoomed: true, records: records, verticalZoom: 2)
+        // Playback publications must not change an otherwise identical view.
+        for _ in 0..<5 {
+            XCTAssertEqual(ReferenceMotionReviewViewport.frame(full, selectedRange: 12...15.135147,
+                zoomed: true, records: records, verticalZoom: 2), fitted)
+        }
+        XCTAssertEqual(ReferenceMotionReviewViewport.frame(full, selectedRange: 12...15.135147,
+            zoomed: false, records: records, verticalZoom: 8), full)
+        XCTAssertEqual(ReferenceMotionReviewViewport.frame(full, selectedRange: nil,
+            zoomed: true, records: records, verticalZoom: 8), full)
+    }
+
+    func testHeightZoomKeepsCentreAndCapsAtEightTimes() throws {
+        let full = try fullFrame()
+        let records = lateBandRecords()
+        let fitted = ReferenceMotionReviewViewport.frame(full, selectedRange: 12...15.135147,
+            zoomed: true, records: records)
+        let zoomed = ReferenceMotionReviewViewport.frame(full, selectedRange: 12...15.135147,
+            zoomed: true, records: records, verticalZoom: 8)
+        let centre: (ScratchStrokeGeometry.CanonicalFrame) -> Double = {
+            $0.positionRange.lowerBound / 2 + $0.positionRange.upperBound / 2
+        }
+        let span: (ScratchStrokeGeometry.CanonicalFrame) -> Double = {
+            $0.positionRange.upperBound - $0.positionRange.lowerBound
+        }
+        XCTAssertEqual(centre(zoomed), centre(fitted), accuracy: 1e-12)
+        XCTAssertEqual(span(zoomed), span(fitted) / 8, accuracy: 1e-12)
+        XCTAssertEqual(zoomed.timeRange, fitted.timeRange)
+        XCTAssertEqual(ReferenceMotionReviewViewport.frame(full, selectedRange: 12...15.135147,
+            zoomed: true, records: records, verticalZoom: .greatestFiniteMagnitude), zoomed)
+    }
+
+    func testInvalidHeightZoomFallsBackToFittedSection() throws {
+        let full = try fullFrame()
+        let records = lateBandRecords()
+        let fitted = ReferenceMotionReviewViewport.frame(full, selectedRange: 12...15.135147,
+            zoomed: true, records: records)
+        for invalid in [Double.nan, .infinity, -.infinity, 0, -1] {
+            XCTAssertEqual(ReferenceMotionReviewViewport.frame(full, selectedRange: 12...15.135147,
+                zoomed: true, records: records, verticalZoom: invalid), fitted)
+        }
+    }
+
+    func testUnknownSectionDoesNotAcquireAVerticalFitOrZoom() throws {
+        let full = try fullFrame()
+        // Motion elsewhere in the take cannot authorize a fit inside a gap.
+        let records = [motion(id: "outside", time: 0...2, start: 0.8, end: 0.9)]
+        for events in [records, []] {
+            let frame = ReferenceMotionReviewViewport.frame(full, selectedRange: 4...8,
+                zoomed: true, records: events, verticalZoom: 8)
+            XCTAssertEqual(frame.timeRange, 4...8)
+            XCTAssertEqual(frame.positionRange, full.positionRange)
+            let geometry = ScratchStrokeGeometry.canonicalGeometry(records: events, layer: .performance, frame: frame)
+            XCTAssertTrue(geometry.motion.segments.isEmpty)
+            XCTAssertEqual(geometry.missingMotion, [4...8])
+        }
+    }
+
+    func testMovementCheckSectionsKeepFixedTimeScaleAndClipTheLastSection() {
+        let recorded = 0.0...15.135147
+        XCTAssertEqual(ReferenceMotionReviewViewport.section(in: recorded, index: 0), 0...4)
+        XCTAssertEqual(ReferenceMotionReviewViewport.section(in: recorded, index: 2), 8...12)
+        XCTAssertEqual(ReferenceMotionReviewViewport.section(in: recorded, index: 3), 12...15.135147)
+        XCTAssertNil(ReferenceMotionReviewViewport.section(in: recorded, index: 4))
+        XCTAssertNil(ReferenceMotionReviewViewport.section(in: recorded, index: -1))
+        XCTAssertNil(ReferenceMotionReviewViewport.section(in: recorded, index: .max))
+        XCTAssertEqual(ReferenceMotionReviewViewport.section(in: 2...11, index: 0), 2...6)
+        XCTAssertEqual(ReferenceMotionReviewViewport.section(in: 2...11, index: 2), 10...11)
+        XCTAssertNil(ReferenceMotionReviewViewport.section(in: 2...2, index: 0))
+        XCTAssertNil(ReferenceMotionReviewViewport.section(in: 0...Double.infinity, index: 0))
+    }
+
+    func testPreferredRepetitionRequiresRecordedMediaAndFallsBackToFirstValid() {
+        let boundaries: [ReferenceRepetitionBoundary] = [
+            .init(index: 0, startBeat: 0, endBeat: 4),
+            .init(index: 1, startBeat: 4, endBeat: 8),
+            .init(index: 2, startBeat: 8, endBeat: 12),
+            .init(index: 3, startBeat: 12, endBeat: 16)
+        ]
+        // At this origin repetition zero is wholly before media; repetition
+        // two is partially recorded and repetition three is wholly after it.
+        XCTAssertEqual(ReferenceMotionReviewViewport.preferredBoundary(in: boundaries, preferredIndex: 2,
+            metadata: metadata(), recordedEnd: 5)?.index, 2)
+        for preferred in [nil, 0, 3, 99] as [Int?] {
+            XCTAssertEqual(ReferenceMotionReviewViewport.preferredBoundary(in: boundaries, preferredIndex: preferred,
+                metadata: metadata(), recordedEnd: 5)?.index, 1)
+        }
+        XCTAssertNil(ReferenceMotionReviewViewport.preferredBoundary(in: boundaries, preferredIndex: 1,
+            metadata: metadata(offset: 100), recordedEnd: 5))
+        XCTAssertNil(ReferenceMotionReviewViewport.preferredBoundary(in: [], preferredIndex: nil,
+            metadata: metadata(), recordedEnd: 5))
     }
 
     func testHighlightUsesDisplayedTimeWindowAndClipsItsEdges() {

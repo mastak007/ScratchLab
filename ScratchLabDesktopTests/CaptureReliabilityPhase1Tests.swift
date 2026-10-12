@@ -17053,23 +17053,31 @@ final class ControllerPlatterDecoderTests: XCTestCase {
     }
 
     func testSavedMultiRevolutionSpinThenPullSurvivesFusionPresentationGate() throws {
-        // Five revolutions over nine seconds make the canonical attempt-wide
-        // normalized speed too small for fusion; the following quarter-turn
-        // pull is similarly flattened. The shared raw decoder accepted both
-        // runs before fusion, so presentation must recover them without adding
-        // either to canonical scoring/export evidence.
+        // Older fusion dropped both runs because their attempt-wide normalized
+        // speed failed camera thresholds. New fusion must retain them, while
+        // presentation of an already-saved legacy snapshot must remain read-only.
         let fixture = wrappedRuns(signedSteps: [18_000, -900])
         let rawMIDI = fixture.map { midiEvent($0.0, $0.1) }
         let decoderEvents = decode(fixture)
         XCTAssertEqual(decoderEvents.map(\.direction), ["forward", "backward"])
 
-        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+        let current = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
             audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
             motionEvents: decoderEvents,
             detectedLabel: nil,
             labelSource: "unknown",
             labelConfidence: nil
         ).withMixerMidiEvents(rawMIDI)
+        XCTAssertEqual(current.recordMovementEvents.map(\.direction), ["forward", "backward"])
+        XCTAssertEqual(current.recordMovementEvents.map(\.startTime), decoderEvents.map(\.startTime))
+        XCTAssertEqual(current.recordMovementEvents.map(\.endTime), decoderEvents.map(\.endTime))
+        let snapshot = CaptureCore.DetectedNotationSnapshot(
+            notationSource: "unavailable", notationConfidence: nil,
+            detectedLabel: nil, labelSource: "unknown", labelConfidence: nil,
+            detectionSources: ["controller"], recordMovementEvents: [],
+            audioEvents: [], faderEvents: [], mixerMidiEvents: rawMIDI,
+            capturedAt: current.capturedAt
+        )
         XCTAssertTrue(snapshot.detectionSources.contains("controller"))
         XCTAssertTrue(snapshot.recordMovementEvents.isEmpty,
                       "fixture must exercise the all-canonical-events-dropped gate")
@@ -17820,32 +17828,32 @@ final class Take002ControllerRoundTripTests: XCTestCase {
             from: midi, controller: 6, channel: 1, deviceName: "Rane ONE MKII")
         XCTAssertEqual(decoded.count, 35)
 
-        // Stage 2: normalizer (merge + classify). 35 → 32: three runs are
-        // dropped by classify (min-duration / min-delta / min-speed), never
-        // merged (the decoder already collapsed same-sign runs).
+        // Stage 2: normalization preserves decoder-accepted travel. Camera
+        // coordinate thresholds must not reject controller runs.
         let normalizer = MacCaptureEngine.RoutineNotationEventNormalizer()
         let debugSession = MacCaptureEngine.RoutineMovementDebugSession(handPoseInterval: 0.04)
         let normalized = normalizer.normalize(
             events: decoded, audioEvents: audioEvents, debugSession: debugSession)
         let ds = debugSession.snapshot()
-        XCTAssertEqual(normalized.count, 30, "35 → 30: two merges + three classify drops")
-        XCTAssertEqual(ds.mergedSegments, 2, "two adjacent same-direction merges")
-        XCTAssertEqual(ds.normalizedDropReasons, ["deltaTooSmall": 2, "speedTooLow": 1])
+        XCTAssertEqual(normalized.count + ds.mergedSegments, decoded.count)
+        XCTAssertTrue(ds.normalizedDropReasons.isEmpty)
+        XCTAssertFalse(CaptureCore.derivePlatterMotionEvidence(from: midi)
+            .retaining(normalizedEvents: normalized).intervals.contains { $0.stage == .normalization })
 
-        // Stage 3: fusion → saved/Review/export notation (32, source "controller").
+        // Stage 3: fusion preserves the same accepted movement without audio gating.
         let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
             audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: audioEvents, confidence: nil),
             motionEvents: decoded,
             detectedLabel: nil, labelSource: "unknown", labelConfidence: nil)
-        XCTAssertEqual(snapshot.recordMovementEvents.count, 30, "30 trusted/saved/Review/export movements")
+        XCTAssertEqual(snapshot.recordMovementEvents, normalized)
         for event in snapshot.recordMovementEvents {
             XCTAssertEqual(event.source, "controller", "controller provenance survives fusion")
         }
         XCTAssertEqual(snapshot.notationSource, "detected")
         XCTAssertTrue(snapshot.detectionSources.contains("controller"))
 
-        // Correlation: 26 of 32 movements overlap at least one of the 20 audio
-        // bursts (a single burst can corroborate two adjacent movements).
+        // Audio correlation remains supplementary; all independently decoded
+        // movements survive, including those without an audible burst.
         let correlated = snapshot.recordMovementEvents.filter { movement in
             audioEvents.contains { audio in
                 guard audio.eventKind == .scratchBurst || audio.eventKind == .possibleDrag else { return false }
@@ -17856,7 +17864,8 @@ final class Take002ControllerRoundTripTests: XCTestCase {
             }
         }.count
         XCTAssertEqual(burstCount, 20, "20 audio bursts (scratchBurst + possibleDrag)")
-        XCTAssertEqual(correlated, 26, "26 of 32 movements are audio-correlated")
+        XCTAssertGreaterThan(correlated, 0)
+        XCTAssertLessThanOrEqual(correlated, snapshot.recordMovementEvents.count)
     }
 }
 
@@ -24605,19 +24614,66 @@ final class RaneMotionProvenanceTests: XCTestCase {
         XCTAssertEqual(review(result).reversals.count, 1)
         XCTAssertEqual(review(result).totalCountedTearHoldCount, 0)
     }
-    func testNormalizerDiscardAndSecondPassRetainProvenance() {
-        // The short forward stroke clears decoder gates but its normalized
-        // excursion is under the existing 0.015 floor beside the large pull.
+    func testDecoderAcceptedStrokeSurvivesUnrelatedTakeScaleAndRepeatedNormalization() {
+        // Identical raw travel must survive beside a much larger movement.
+        // Camera-coordinate floors used to discard the first decoded stroke.
         let raw = packets(1, count: 10, duration: 0.2)
             + packets(-30, count: 100, start: 0.2, duration: 1, phase: 10).dropFirst()
         let decoded = CaptureCore.derivePlatterMotionEvidence(from: raw)
         XCTAssertEqual(decoded.events.count, 2)
         let retained = normalized(raw)
-        XCTAssertEqual(retained.events.count, 1)
-        XCTAssertTrue(retained.intervals.contains { $0.kind == .discardedMotion && $0.stage == .normalization })
+        XCTAssertEqual(retained.events.count, 2)
+        XCTAssertEqual(retained.events.map(\.direction), ["forward", "backward"])
+        XCTAssertEqual(retained.events.map(\.startTime), decoded.events.map(\.startTime))
+        XCTAssertEqual(retained.events.map(\.endTime), decoded.events.map(\.endTime))
+        XCTAssertEqual(retained.events.map(\.startPosition), decoded.events.map(\.startPosition))
+        XCTAssertEqual(retained.events.map(\.endPosition), decoded.events.map(\.endPosition))
+        XCTAssertEqual(retained.events.map(\.confidence), decoded.events.map(\.confidence))
+        XCTAssertEqual(retained.intervals, decoded.intervals)
         let second = MacCaptureEngine.RoutineNotationEventNormalizer().normalize(events: retained.events, audioEvents: [])
         XCTAssertEqual(retained.retaining(normalizedEvents: second), retained)
-        XCTAssertTrue(review(retained).segments.contains { $0.state == .unknown && $0.reasons.contains(.discardedMotion) })
+        XCTAssertEqual(review(retained).reversals.count, 1)
+    }
+
+    func testSlowControllerTravelSurvivesFusionAndExportWithoutAudio() throws {
+        // The first event exceeds the camera delta floor but falls below its
+        // speed floor after a later large pull expands the coordinate range.
+        let raw = packets(1, count: 30, duration: 1)
+            + packets(-10, count: 100, start: 1, duration: 1, phase: 30).dropFirst()
+        let decoded = CaptureCore.derivePlatterMotionEvidence(from: raw)
+        XCTAssertEqual(decoded.events.count, 2)
+        let first = try XCTUnwrap(decoded.events.first)
+        let delta = abs(first.endPosition - first.startPosition)
+        XCTAssertGreaterThan(delta, MacCaptureEngine.RoutineNotationEventNormalizer.minPositionDelta)
+        XCTAssertLessThan(delta / (first.endTime - first.startTime),
+                          MacCaptureEngine.RoutineNotationEventNormalizer.minSpeedForStroke)
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: decoded.events, detectedLabel: nil,
+            labelSource: "unknown", labelConfidence: nil)
+        XCTAssertEqual(snapshot.recordMovementEvents.count, 2)
+        XCTAssertEqual(snapshot.recordMovementEvents.map(\.direction), ["forward", "backward"])
+        XCTAssertEqual(snapshot.recordMovementEvents.map(\.confidence), decoded.events.map(\.confidence))
+        let loaded = try JSONDecoder().decode(CaptureCore.DetectedNotationSnapshot.self,
+            from: JSONEncoder().encode(snapshot))
+        XCTAssertEqual(loaded.recordMovementEvents, snapshot.recordMovementEvents)
+        let exported = loaded.recordMovementEvents.map { SessionExportRecordMovementEvent(from: $0) }
+        XCTAssertEqual(exported.map(\.startTime), decoded.events.map(\.startTime))
+        XCTAssertEqual(exported.map(\.endTime), decoded.events.map(\.endTime))
+        XCTAssertEqual(exported.map(\.source), ["controller", "controller"])
+    }
+
+    func testCameraCoordinateNoiseFloorsStillApply() {
+        let normalizer = MacCaptureEngine.RoutineNotationEventNormalizer()
+        for source in ["detected", "video", "fused"] {
+            for delta in [0.005, 0.03] {
+                let event = CaptureCore.DetectedNotationRecordMovementEvent(
+                    startTime: 0, endTime: 1, startPosition: 0, endPosition: delta,
+                    direction: "forward", movementKind: .normalPush, speed: delta,
+                    confidence: 0.95, source: source)
+                XCTAssertTrue(normalizer.normalize(events: [event], audioEvents: []).isEmpty)
+            }
+        }
     }
     func testClockMismatchAndMixedSourcesFailClosed() {
         let raw = packets(1)

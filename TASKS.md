@@ -3340,3 +3340,10 @@ entries remain historical; this checkpoint supersedes the renderer visual item.
 - [x] User-selected Save Capture PNG references (4 October 2026, SOFTWARE VERIFIED): saved canonical curves, independent faders and unknown motion retained in paginated PNGs; source-bound hashed ZIP round-trip, validator and all-platform gate passed. Updated signed package prepared. Operator PNG/new-rig acceptance not run. See docs/checkpoints/2026-10-04-capture-png.md.
 
 - [x] User-selected PNG layout repair (5 October 2026): whole-bar rows, constant partial-tail scale and readable chart labels verified; full required tests/builds and signed updated DJ ZIP passed. No new hardware/operator acceptance. See docs/checkpoints/2026-10-05-png-layout.md.
+
+<!-- notation-framing-20261012 begin -->
+## Explicit user task — notation framing checkpoint, 12 October 2026
+
+- [x] Fix notation compressed at the top of Review and prepare the verified checkpoint: fit the selected repetition/four-second section, add Height/Re-centre/Whole take, preserve saved/export evidence, and retain controller-decoded strokes. Exact six-file task candidate passed scripts/build.sh all (9,228 XCTest passes, 124 skips; 1,064 Swift Testing passes; 123 Python passes; all platform builds PASS). Complete current app separately passed 480 focused XCTest executions, four skips and universal signed CXL build/package verification. Existing dirty work is preserved in the verified 753-path source archive and excluded from the narrow commit. Authorized commit/push completion is recorded in the durable GIT-RECEIPT.json; physical/Intel/operator acceptance remains NOT RUN. Evidence: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-12/notation-framing.
+
+<!-- notation-framing-20261012 end -->

@@ -2103,6 +2103,25 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
             let delta = abs(event.endPosition - event.startPosition)
             let speed = delta / max(duration, 0.001)
+            if event.source == "controller" {
+                // The controller decoder already checks packet continuity,
+                // duration and raw step travel. Its positions are normalized
+                // over the WHOLE take, not camera coordinates: applying the
+                // camera delta/speed floors here makes a valid stroke disappear
+                // when unrelated travel elsewhere increases the take's range.
+                guard event.startTime.isFinite, event.endTime.isFinite,
+                      event.startPosition.isFinite, event.endPosition.isFinite,
+                      duration.isFinite, delta > 0, speed.isFinite,
+                      event.confidence.isFinite,
+                      event.direction == "forward" || event.direction == "backward" else { return nil }
+                return CaptureCore.DetectedNotationRecordMovementEvent(
+                    startTime: event.startTime, endTime: event.endTime,
+                    startPosition: event.startPosition, endPosition: event.endPosition,
+                    direction: event.direction,
+                    movementKind: event.direction == "forward" ? .normalPush : .normalPull,
+                    speed: speed, confidence: event.confidence, source: event.source
+                )
+            }
             let overlapsAudio = overlapsAudioActivity(event: event, audioEvents: audioEvents)
 
             guard duration >= Self.minStrokeDuration || overlapsAudio else {

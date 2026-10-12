@@ -1,3 +1,22 @@
+<!-- notation-framing-20261012 begin -->
+## Notation framing checkpoint — 12 October 2026
+
+Implementation and software verification are complete. Do not repeat the full gate without a new change or unresolved failure. Canonical source: /Users/karlwatson/Developer/ScratchLab-CXL-Final-Capture-Fixes-20260913/source; branch codex/cxl-fader-checkpoint-20261003; original parent 5e59ca85e70a2a0ecb78224ed72e83a5fd4c6294. First read the durable REPORT.md, GIT-RECEIPT.json and DELIVERY-RECEIPT.json for the final observed Git/delivery state. Preserve all unrelated dirty/untracked work; never install the reduced narrow verification app.
+
+Cause: the supplied 80 BPM take 8873D5DE retains its controller motion, but long forward travel raises the cumulative position baseline. Whole-take vertical framing then compresses later scratches into the top 21.8064% of the chart. The preceding normalization fix retains all 54 decoded movements and matches the saved take; the old normalizer retained 47. This change corrects the remaining review-framing problem.
+
+Review now fits supported motion inside the selected repetition, or a fixed four-second section for takes without repetition boundaries. Height 1x-8x, Re-centre and Whole take are reversible presentation controls. The frame stays fixed during playback. Missing, invalid or overlapping evidence cannot authorize a fitted range. Saved/raw coordinates, timing, projection, metadata, export and live capture framing are unchanged. Full-take PNG export retains the original evidence scale.
+
+Verification: exact narrow code/test candidate c2ac97006bd0eb9259d760f0e58c5aa2949ae77a passed required scripts/build.sh all: 9,228 XCTest passes, 124 skips, zero failures; 1,064 named Swift Testing passes (532 in each configuration); 123 Python passes; iOS, macOS Release, CXLRelease and Watch builds PASS. All 22 required regression names ran twice; input hashes match and all supervised children were reaped without survivors. The shared-renderer synthetic before/after image was visually inspected; it is not physical or operator acceptance.
+
+The complete current app retains the earlier GUI/performance and other local work. Its separate focused verification passed 480 XCTest executions, four skips and all 36 required names twice, followed by a universal Developer ID CXLRelease build and verified signed ZIP roundtrip. This is a focused current-app check plus build, not a new full all-platform gate for that broader source. Earlier full-source gate receipts and the exact source delta are retained. The six-file narrow commit has its own full gate above.
+
+Delivery: SL-Capture-Notation-Framing-Fix-2026-10-12.zip. Developer ID signed for Intel and Apple silicon; not notarized. Existing app preserved. Installation, launch, Intel responsiveness, physical calibration and operator visual acceptance remain NOT RUN. Reopen the existing take in the new candidate to inspect the fitted review; another recording is not required for that check.
+
+Durable checkpoint: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-12/notation-framing. The verified source archive preserves all 753 current source paths including unrelated dirty work. Only six task code/test files and these four task-specific workflow entries belong in the Git checkpoint. User explicitly authorized commit and push; the actual commit, branch, staged-byte comparison and remote verification are recorded separately in GIT-RECEIPT.json after Git completes. Do not infer remote completion from this pre-commit source record.
+
+<!-- notation-framing-20261012 end -->
+
 # Current checkpoint — Batch 2 final verification BLOCKED / NOT VERIFIED
 
 

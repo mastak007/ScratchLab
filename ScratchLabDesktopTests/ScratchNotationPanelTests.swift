@@ -1564,6 +1564,182 @@ final class CanonicalTearRendererTests: XCTestCase {
             }
     }
 
+    private func singleMotion(id: String, points: [Record.CurvePoint],
+                              direction: ScratchNotationDirection = .forward,
+                              domain: ScratchNotationTimingDomain = .seconds,
+                              evidence: Record.Evidence? = nil) -> Record {
+        let evidence = evidence ?? motionEvidence
+        let curve = Record.MotionCurve(points: points, evidence: evidence)
+        return Record(id: id, direction: direction, timingDomain: domain,
+            coordinateSpace: .samplePosition, evidence: motionEvidence,
+            subdivisions: [.init(id: "\(id)-move",
+                span: .init(startTime: points.first!.time, endTime: points.last!.time),
+                evidence: motionEvidence, measuredCurve: curve, targetCurve: curve)])
+    }
+
+    func testReviewFitCentersLateHighBandWithoutChangingRawMotion() throws {
+        let records = [
+            singleMotion(id: "early", points: [.init(time: 0, position: 0), .init(time: 2, position: 1)]),
+            singleMotion(id: "late-forward", points: [.init(time: 12, position: 0.82), .init(time: 13.5, position: 0.99)]),
+            singleMotion(id: "late-backward", points: [.init(time: 13.5, position: 0.99), .init(time: 15, position: 0.82)],
+                         direction: .backward)
+        ]
+        let original = records
+        let shared = try frame(time: 12...15, position: 0...1)
+        let fitted = shared.fittingVisibleMotion(in: records, layer: .performance)
+        XCTAssertEqual(shared.fittedVisibleMotionFrame(in: records, layer: .performance), fitted)
+        XCTAssertEqual(fitted.timeRange, shared.timeRange)
+        XCTAssertEqual(fitted.coordinateSpace, shared.coordinateSpace)
+        XCTAssertEqual(fitted.beatsPerMinute, shared.beatsPerMinute)
+        XCTAssertEqual(fitted.positionRange.lowerBound, 0.79875, accuracy: 1e-12)
+        XCTAssertEqual(fitted.positionRange.upperBound, 1.01125, accuracy: 1e-12)
+        let geometry = ScratchStrokeGeometry.canonicalGeometry(records: records, layer: .performance, frame: fitted)
+        let positions = geometry.motion.segments.flatMap { [$0.startPosition, $0.endPosition] }
+        XCTAssertEqual(try XCTUnwrap(positions.min()), 0.1, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(positions.max()), 0.9, accuracy: 1e-12)
+        XCTAssertEqual(records, original, "review framing must not normalize the source records again")
+        XCTAssertEqual(shared.positionRange, 0...1, "the shared comparison frame remains unchanged")
+    }
+
+    func testReviewFitClipsCrossingPairsAtBothWindowEdges() throws {
+        let record = singleMotion(id: "crossing", points: [
+            .init(time: 0, position: -100), .init(time: 10, position: 100)
+        ])
+        let fitted = try frame(time: 4...6, position: -100...100)
+            .fittingVisibleMotion(in: [record], layer: .performance)
+        XCTAssertEqual(fitted.positionRange.lowerBound, -25, accuracy: 1e-12)
+        XCTAssertEqual(fitted.positionRange.upperBound, 25, accuracy: 1e-12)
+        let result = try geometry(record, in: fitted)
+        XCTAssertEqual(result.motion.segments.count, 1)
+        XCTAssertEqual(try XCTUnwrap(result.motion.segments.first).startPosition, 0.1, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(result.motion.segments.first).endPosition, 0.9, accuracy: 1e-12)
+    }
+
+    func testReviewFitConvertsBeatTimesUsingExistingBPM() throws {
+        let record = singleMotion(id: "beats", points: [
+            .init(time: 0, position: 0), .init(time: 8, position: 8)
+        ], domain: .beats)
+        let shared = try frame(time: 1...2, position: 0...8, bpm: 120)
+        let fitted = shared.fittingVisibleMotion(in: [record], layer: .target)
+        XCTAssertEqual(fitted.positionRange.lowerBound, 1.75, accuracy: 1e-12)
+        XCTAssertEqual(fitted.positionRange.upperBound, 4.25, accuracy: 1e-12)
+        XCTAssertEqual(fitted.beatsPerMinute, 120)
+        XCTAssertEqual(fitted.timeRange, 1...2)
+    }
+
+    func testReviewFitCentersObservedHoldAndLeavesMissingHoldUnfitted() throws {
+        let record = tear()
+        let shared = try frame(time: 1.05...1.2)
+        let fitted = shared.fittingVisibleMotion(in: [record], layer: .performance)
+        XCTAssertEqual((fitted.positionRange.lowerBound + fitted.positionRange.upperBound) / 2, 1, accuracy: 1e-12)
+        XCTAssertLessThan(fitted.positionRange.upperBound - fitted.positionRange.lowerBound, 0.1)
+        let visible = try geometry(record, in: fitted)
+        XCTAssertEqual(visible.motion.segments.count, 1)
+        XCTAssertTrue(try XCTUnwrap(visible.motion.segments.first).isHold)
+        XCTAssertEqual(try XCTUnwrap(visible.motion.segments.first).startPosition, 0.5, accuracy: 1e-12)
+
+        let hold = record.internalHolds[0]
+        let missing = Record.TearHold(id: hold.id, span: hold.span, label: hold.label,
+                                      evidence: hold.evidence, position: nil)
+        XCTAssertEqual(shared.fittingVisibleMotion(in: [replacing(record, holds: [missing])], layer: .performance), shared)
+        let gap = try frame(time: 3...4)
+        XCTAssertEqual(gap.fittingVisibleMotion(in: [record], layer: .performance), gap)
+        XCTAssertEqual(gap.fittingVisibleMotion(in: [], layer: .performance), gap)
+        XCTAssertNil(gap.fittedVisibleMotionFrame(in: [record], layer: .performance))
+        XCTAssertNil(gap.fittedVisibleMotionFrame(in: [], layer: .performance))
+    }
+
+    func testReviewFitRejectsInvalidUnsupportedOrMismatchedMotion() throws {
+        let shared = try frame(time: 0...1, position: 0...1)
+        for positions in [[0.0, 0], [0, -1], [0, Double.infinity], [0, Double.nan], [0, 1, 0.5]] {
+            let points = positions.enumerated().map {
+                Record.CurvePoint(time: Double($0.offset) / Double(positions.count - 1), position: $0.element)
+            }
+            let record = singleMotion(id: "invalid", points: points)
+            XCTAssertEqual(shared.fittingVisibleMotion(in: [record], layer: .performance), shared)
+        }
+        let unsupported = Record.Evidence(provenance: .unknown,
+            observation: .init(source: .platterTimeline, confidence: 1, reason: "Unknown evidence"))
+        let record = singleMotion(id: "unsupported", points: [
+            .init(time: 0, position: 0.82), .init(time: 1, position: 0.99)
+        ], evidence: unsupported)
+        XCTAssertEqual(shared.fittingVisibleMotion(in: [record], layer: .performance), shared)
+        let mismatch = try XCTUnwrap(Frame(timeRange: 0...1, positionRange: 0...1,
+                                          coordinateSpace: .platterRevolutions, beatsPerMinute: 120))
+        XCTAssertEqual(mismatch.fittingVisibleMotion(in: [tear([1])], layer: .performance), mismatch)
+    }
+
+    func testReviewFitUsesOnlyTheRequestedCurveLayer() throws {
+        let original = tear([1])
+        let sub = original.subdivisions[0]
+        let target = Record.MotionCurve(points: [.init(time: 0, position: 10), .init(time: 1, position: 20)],
+                                         evidence: motionEvidence)
+        let record = replacing(original, subdivisions: [.init(id: sub.id, span: sub.span,
+            evidence: sub.evidence, measuredCurve: sub.measuredCurve, targetCurve: target)])
+        let shared = try frame(time: 0...1, position: 0...20)
+        let performance = shared.fittingVisibleMotion(in: [record], layer: .performance)
+        let targetFrame = shared.fittingVisibleMotion(in: [record], layer: .target)
+        XCTAssertEqual(performance.positionRange, -0.125...1.125)
+        XCTAssertEqual(targetFrame.positionRange, 8.75...21.25)
+        let missing = replacing(record, subdivisions: [.init(id: sub.id, span: sub.span,
+            evidence: sub.evidence, targetCurve: target)])
+        XCTAssertEqual(shared.fittingVisibleMotion(in: [missing], layer: .performance), shared)
+    }
+
+    func testReviewFitIsUnavailableWhenVisibleCurvesOverlap() throws {
+        let shared = try frame(time: 0...1, position: 0...1)
+        let points: [Record.CurvePoint] = [.init(time: 0, position: 0.82), .init(time: 1, position: 0.99)]
+        let records = [singleMotion(id: "first", points: points), singleMotion(id: "second", points: points)]
+        let result = ScratchStrokeGeometry.canonicalGeometry(records: records, layer: .performance, frame: shared)
+        XCTAssertTrue(result.motion.isEmpty)
+        XCTAssertEqual(result.missingMotion, [0...1])
+        XCTAssertNil(shared.fittedVisibleMotionFrame(in: records, layer: .performance))
+        XCTAssertEqual(shared.fittingVisibleMotion(in: records, layer: .performance), shared)
+    }
+
+    func testReviewFitIsUnavailableWhenValidCurveOverlapsUnknownMotion() throws {
+        let shared = try frame(time: 0...1, position: 0...1)
+        let valid = singleMotion(id: "valid", points: [.init(time: 0, position: 0.82), .init(time: 1, position: 0.99)])
+        let sub = valid.subdivisions[0]
+        let missing = replacing(valid, subdivisions: [.init(id: sub.id, span: sub.span,
+            evidence: sub.evidence, targetCurve: sub.targetCurve)])
+        let contradictory = singleMotion(id: "contradictory", points: [
+            .init(time: 0, position: 0.99), .init(time: 1, position: 0.82)
+        ])
+        let unsupported = singleMotion(id: "unsupported", points: [
+            .init(time: 0, position: 0.82), .init(time: 1, position: 0.99)
+        ], evidence: .init(provenance: .unknown,
+                          observation: .init(source: .platterTimeline, confidence: 1, reason: "Unverified")))
+        let mismatch = Record(id: "mismatch", direction: valid.direction, timingDomain: valid.timingDomain,
+            coordinateSpace: .platterRevolutions, evidence: valid.evidence, subdivisions: valid.subdivisions)
+        let unplaced = Record(id: "unplaced", direction: .forward, timingDomain: .seconds,
+            coordinateSpace: .samplePosition, evidence: motionEvidence, subdivisions: [])
+        for invalid in [missing, contradictory, unsupported, mismatch, unplaced] {
+            let records = [valid, invalid]
+            let result = ScratchStrokeGeometry.canonicalGeometry(records: records, layer: .performance, frame: shared)
+            XCTAssertTrue(result.motion.isEmpty)
+            XCTAssertEqual(result.missingMotion, [0...1])
+            XCTAssertNil(shared.fittedVisibleMotionFrame(in: records, layer: .performance))
+            XCTAssertEqual(shared.fittingVisibleMotion(in: records, layer: .performance), shared)
+        }
+    }
+
+    func testReviewFitDoesNotTreatSeparateUnknownIntervalsAsOverlaps() throws {
+        let shared = try frame(time: 0...3, position: 0...1)
+        let earlier = singleMotion(id: "earlier", points: [.init(time: 0, position: 0.82), .init(time: 1, position: 0.99)])
+        let unknown = singleMotion(id: "unknown", points: [.init(time: 1, position: 0.99), .init(time: 2, position: 0.82)])
+        let later = singleMotion(id: "later", points: [.init(time: 2, position: 0.99), .init(time: 3, position: 0.82)],
+                                 direction: .backward)
+        // Deliberately unordered: availability must follow the time ranges.
+        let records = [later, unknown, earlier]
+        let fitted = try XCTUnwrap(shared.fittedVisibleMotionFrame(in: records, layer: .performance))
+        XCTAssertEqual(fitted.positionRange.lowerBound, 0.79875, accuracy: 1e-12)
+        XCTAssertEqual(fitted.positionRange.upperBound, 1.01125, accuracy: 1e-12)
+        let result = ScratchStrokeGeometry.canonicalGeometry(records: records, layer: .performance, frame: fitted)
+        XCTAssertEqual(result.missingMotion, [1...2])
+        XCTAssertEqual(result.motion.segments.count, 2)
+    }
+
     func testOneTwoAndThreeTearCoordinateSnapshots() throws {
         let snapshots: [[[Double]]] = [
             [[0,88,100,69], [100,69,125,69], [125,69,225,50]],

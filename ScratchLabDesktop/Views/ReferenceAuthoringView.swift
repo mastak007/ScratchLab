@@ -185,6 +185,13 @@ struct ReferenceAuthoringView: View {
                 companionReceiver: companionReceiver
             )
         )
+        .onChange(of: viewModel.reviewedTake?.id) { _, _ in
+            motionReviewFocus = nil
+        }
+        .onChange(of: viewModel.reviewedTake?.evidence.boundaries.repetitions) { _, _ in
+            // A trim changes the inspected window; discard its extra height zoom.
+            motionReviewFocus?.verticalZoom = 1
+        }
         .onChange(of: viewModel.selectedTechnique) { _, _ in
             viewModel.refreshAutofilledPatternIdentity()
         }
@@ -1719,25 +1726,82 @@ struct ReferenceAuthoringView: View {
                 bpm: chartBPM
             ), !projection.isEmpty {
                 let boundary = reviewTake.flatMap { focusedBoundary(for: $0) }
+                let focus = reviewTake.flatMap { motionReviewFocus?.takeID == $0.id ? motionReviewFocus : nil }
                 let selectedRange = reviewTake.flatMap { take in
-                    boundary.flatMap {
-                        ReferenceMotionReviewViewport.range(for: $0, metadata: take.evidence.metadata,
+                    if let boundary {
+                        return ReferenceMotionReviewViewport.range(for: boundary, metadata: take.evidence.metadata,
                             recordedEnd: take.evidence.metadata.witnessedTiming?.measuredWAVDurationSeconds
                                 ?? fullFrame.timeRange.upperBound)
                     }
+                    return ReferenceMotionReviewViewport.section(in: fullFrame.timeRange, index: focus?.sectionIndex ?? 0)
                 }
-                let zoomed = selectedRange != nil && (reviewTake.map { motionReviewFocus?.takeID == $0.id
-                    && motionReviewFocus?.isZoomed == true } ?? false)
-                let frame = ReferenceMotionReviewViewport.frame(fullFrame, selectedRange: selectedRange, zoomed: zoomed)
-                if let take = reviewTake, let boundary {
-                    HStack {
-                        Text("Highlighted repetition \(boundary.index + 1) · beats \(boundary.startBeat, specifier: "%.2f")–\(boundary.endBeat, specifier: "%.2f")")
-                            .font(.caption)
-                        Spacer()
-                        Button(zoomed ? "Whole take" : "Zoom to repetition") {
-                            motionReviewFocus = .init(takeID: take.id, repetitionIndex: boundary.index, isZoomed: !zoomed)
+                let zoomed = selectedRange != nil && (focus?.isZoomed ?? true)
+                let verticalZoom = focus?.verticalZoom ?? 1
+                let selectedFrame = ReferenceMotionReviewViewport.frame(fullFrame,
+                    selectedRange: selectedRange, zoomed: true)
+                let fittedFrame = selectedRange == nil ? nil
+                    : selectedFrame.fittedVisibleMotionFrame(in: projection.records, layer: .performance)
+                let frame = zoomed
+                    ? fittedFrame.map { ReferenceMotionReviewViewport.zoomHeight($0, factor: verticalZoom) }
+                        ?? selectedFrame
+                    : fullFrame
+                if let take = reviewTake {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            if let boundary {
+                                Text("Repetition \(boundary.index + 1) · beats \(boundary.startBeat, specifier: "%.2f")–\(boundary.endBeat, specifier: "%.2f")")
+                            } else if let selectedRange {
+                                Button("Previous section") {
+                                    motionReviewFocus = .init(takeID: take.id, repetitionIndex: -1,
+                                        isZoomed: true, sectionIndex: max(0, (focus?.sectionIndex ?? 0) - 1))
+                                }
+                                .disabled((focus?.sectionIndex ?? 0) == 0)
+                                Text("\(selectedRange.lowerBound, specifier: "%.2f")–\(selectedRange.upperBound, specifier: "%.2f") s")
+                                    .monospacedDigit()
+                                Button("Next section") {
+                                    motionReviewFocus = .init(takeID: take.id, repetitionIndex: -1,
+                                        isZoomed: true, sectionIndex: (focus?.sectionIndex ?? 0) + 1)
+                                }
+                                .disabled(ReferenceMotionReviewViewport.section(in: fullFrame.timeRange,
+                                    index: (focus?.sectionIndex ?? 0) + 1) == nil)
+                            }
+                            Spacer()
+                            Button(zoomed ? "Whole take" : (boundary == nil ? "Zoom to section" : "Zoom to repetition")) {
+                                motionReviewFocus = .init(takeID: take.id, repetitionIndex: boundary?.index ?? -1,
+                                    isZoomed: !zoomed, sectionIndex: focus?.sectionIndex ?? 0)
+                            }
+                            .disabled(selectedRange == nil)
                         }
-                        .disabled(selectedRange == nil)
+                        .font(.caption)
+                        HStack(spacing: 10) {
+                            Text("Height")
+                            Button("−") {
+                                motionReviewFocus = .init(takeID: take.id, repetitionIndex: boundary?.index ?? -1,
+                                    isZoomed: true, sectionIndex: focus?.sectionIndex ?? 0,
+                                    verticalZoom: max(1, verticalZoom / 2))
+                            }
+                            .accessibilityLabel("Zoom out vertically")
+                            .disabled(!zoomed || fittedFrame == nil || verticalZoom <= 1)
+                            Text("\(zoomed ? verticalZoom : 1, specifier: "%.0f")×")
+                                .monospacedDigit().frame(width: 28)
+                            Button("+") {
+                                motionReviewFocus = .init(takeID: take.id, repetitionIndex: boundary?.index ?? -1,
+                                    isZoomed: true, sectionIndex: focus?.sectionIndex ?? 0,
+                                    verticalZoom: min(8, verticalZoom * 2))
+                            }
+                            .accessibilityLabel("Zoom in vertically")
+                            .disabled(fittedFrame == nil || verticalZoom >= 8)
+                            Button("Re-centre") {
+                                motionReviewFocus = .init(takeID: take.id, repetitionIndex: boundary?.index ?? -1,
+                                    isZoomed: true, sectionIndex: focus?.sectionIndex ?? 0)
+                            }
+                            .disabled(fittedFrame == nil)
+                            Text(!zoomed ? "Whole-take scale" : fittedFrame == nil
+                                ? "No supported motion to fit" : verticalZoom == 1
+                                ? "Fitted height · view only" : "Height zoom · view only")
+                                .foregroundStyle(.secondary)
+                        }
+                        .font(.caption)
                     }
                     if selectedRange == nil {
                         Text("This repetition is outside the recorded range. Adjust its Start and End beats.")
@@ -2392,12 +2456,20 @@ struct ReferenceAuthoringView: View {
     private func focusedBoundary(for take: ReferenceAuthoringTake) -> ReferenceRepetitionBoundary? {
         let index = motionReviewFocus?.takeID == take.id
             ? motionReviewFocus?.repetitionIndex : take.evidence.boundaries.selectedRepetitionIndex
-        return take.evidence.boundaries.repetitions.first { $0.index == index }
+        // Keep an explicitly chosen invalid boundary available for correction.
+        if motionReviewFocus?.takeID == take.id,
+           let selected = take.evidence.boundaries.repetitions.first(where: { $0.index == index }) {
+            return selected
+        }
+        return ReferenceMotionReviewViewport.preferredBoundary(in: take.evidence.boundaries.repetitions,
+            preferredIndex: index, metadata: take.evidence.metadata,
+            recordedEnd: take.evidence.metadata.witnessedTiming?.measuredWAVDurationSeconds
+                ?? take.tearProjection.timeRange?.upperBound ?? 0)
+            ?? take.evidence.boundaries.repetitions.first
     }
 
     private func focusMotion(on boundary: ReferenceRepetitionBoundary, take: ReferenceAuthoringTake) {
-        motionReviewFocus = .init(takeID: take.id, repetitionIndex: boundary.index,
-            isZoomed: motionReviewFocus?.takeID == take.id && motionReviewFocus?.isZoomed == true)
+        motionReviewFocus = .init(takeID: take.id, repetitionIndex: boundary.index, isZoomed: true)
     }
 
     private func startBeatBinding(for boundary: ReferenceRepetitionBoundary) -> Binding<Double> {
@@ -2816,9 +2888,11 @@ private struct ReferenceMotionReviewFocus {
     let takeID: String
     let repetitionIndex: Int
     let isZoomed: Bool
+    var sectionIndex: Int = 0
+    var verticalZoom: Double = 1
 }
 
-/// Presentation-only coordinates. Full records and their vertical frame stay
+/// Presentation-only framing. Saved records and export coordinates stay
 /// unchanged; beats use the same measured media origin as audio audition.
 enum ReferenceMotionReviewViewport {
     static func range(for boundary: ReferenceRepetitionBoundary,
@@ -2827,12 +2901,44 @@ enum ReferenceMotionReviewViewport {
             end: boundary.endSeconds(metadata: metadata), duration: recordedEnd)
     }
 
+    static func preferredBoundary(in boundaries: [ReferenceRepetitionBoundary], preferredIndex: Int?,
+                                  metadata: ReferenceTakeMetadata,
+                                  recordedEnd: Double) -> ReferenceRepetitionBoundary? {
+        let valid = boundaries.filter { range(for: $0, metadata: metadata, recordedEnd: recordedEnd) != nil }
+        return valid.first { $0.index == preferredIndex } ?? valid.first
+    }
+
+    /// Beatless movement checks have no repetitions. Inspect fixed four-second
+    /// sections without inventing repetition metadata or following playback.
+    static func section(in timeRange: ClosedRange<Double>, index: Int) -> ClosedRange<Double>? {
+        guard index >= 0, timeRange.lowerBound.isFinite, timeRange.upperBound.isFinite else { return nil }
+        let start = timeRange.lowerBound + Double(index) * 4
+        let end = min(start + 4, timeRange.upperBound)
+        guard start.isFinite, end.isFinite, end > start else { return nil }
+        return start...end
+    }
+
     static func frame(_ fullFrame: ScratchStrokeGeometry.CanonicalFrame,
-                      selectedRange: ClosedRange<Double>?, zoomed: Bool) -> ScratchStrokeGeometry.CanonicalFrame {
-        guard zoomed, let selectedRange else { return fullFrame }
-        return ScratchStrokeGeometry.CanonicalFrame(timeRange: selectedRange,
-            positionRange: fullFrame.positionRange, coordinateSpace: fullFrame.coordinateSpace,
-            beatsPerMinute: fullFrame.beatsPerMinute) ?? fullFrame
+                      selectedRange: ClosedRange<Double>?, zoomed: Bool,
+                      records: [ScratchNotation.GestureRecord] = [],
+                      verticalZoom: Double = 1) -> ScratchStrokeGeometry.CanonicalFrame {
+        guard zoomed, let selectedRange,
+              let selected = ScratchStrokeGeometry.CanonicalFrame(timeRange: selectedRange,
+                positionRange: fullFrame.positionRange, coordinateSpace: fullFrame.coordinateSpace,
+                beatsPerMinute: fullFrame.beatsPerMinute) else { return fullFrame }
+        guard let fitted = selected.fittedVisibleMotionFrame(in: records, layer: .performance) else { return selected }
+        return zoomHeight(fitted, factor: verticalZoom)
+    }
+
+    static func zoomHeight(_ frame: ScratchStrokeGeometry.CanonicalFrame,
+                           factor: Double) -> ScratchStrokeGeometry.CanonicalFrame {
+        guard factor.isFinite, factor > 1 else { return frame }
+        let centre = frame.positionRange.lowerBound / 2 + frame.positionRange.upperBound / 2
+        let halfSpan = (frame.positionRange.upperBound - frame.positionRange.lowerBound) / (2 * min(factor, 8))
+        guard centre.isFinite, halfSpan.isFinite, halfSpan > 0 else { return frame }
+        return ScratchStrokeGeometry.CanonicalFrame(timeRange: frame.timeRange,
+            positionRange: (centre - halfSpan)...(centre + halfSpan), coordinateSpace: frame.coordinateSpace,
+            beatsPerMinute: frame.beatsPerMinute) ?? frame
     }
 
     static func visibleFractions(_ selection: ClosedRange<Double>,
