@@ -1897,7 +1897,7 @@ struct ReferenceTearReviewConfiguration: Equatable, Sendable {
     var lowMovementConfidence: Double = 0.75
     /// Times closer than this are the same instant.
     var timeTolerance: Double = 1e-6
-    /// Both duration AND small measured excursion are needed for chatter.
+    /// Both duration AND small measured excursion are needed for non-controller chatter.
     /// The amplitude floor matches the existing normalized-motion noise floor;
     /// it is provisional until hardware calibration, not a physical unit.
     var reversalConfirmationDuration: Double = 0.25
@@ -1935,6 +1935,7 @@ enum ReferenceTearSegmentationReviewBuilder {
         let direction: ScratchNotationDirection
         let confidence: Double
         let displacement: Double
+        let source: String
     }
 
     static func build(
@@ -2001,7 +2002,8 @@ enum ReferenceTearSegmentationReviewBuilder {
                     span: ReferenceTearTimeSpan(startTime: event.startTime, endTime: event.endTime),
                     direction: direction,
                     confidence: event.confidence,
-                    displacement: abs(event.endPosition - event.startPosition)
+                    displacement: abs(event.endPosition - event.startPosition),
+                    source: event.source
                 )
             )
         }
@@ -2199,9 +2201,11 @@ enum ReferenceTearSegmentationReviewBuilder {
         var duration: Double { endTime - startTime }
     }
 
-    /// Only bounded, contiguous, low-amplitude short counter-motion may be
+    /// Only bounded, contiguous, low-amplitude short non-controller counter-motion may be
     /// attributed to chatter. Its segment remains UNKNOWN, never a monotonic
     /// travel curve or stationary hold under the surrounding direction.
+    /// Controller runs already passed packet/duration/raw-step decoder gates;
+    /// their take-normalized excursion cannot establish a second noise floor.
     private static func mergeDirectionChatter(
         travels: [Travel],
         configuration: ReferenceTearReviewConfiguration
@@ -2218,7 +2222,8 @@ enum ReferenceTearSegmentationReviewBuilder {
         for position in 1..<travels.count {
             let travel = travels[position]
             let confirmed = groups[groups.count - 1]
-            let boundedChatter = position + 1 < travels.count
+            let boundedChatter = travel.source != "controller"
+                && position + 1 < travels.count
                 && travels[position + 1].direction == confirmed.direction
                 && abs(travel.span.startTime - confirmed.endTime) <= configuration.timeTolerance
                 && abs(travels[position + 1].span.startTime - travel.span.endTime) <= configuration.timeTolerance

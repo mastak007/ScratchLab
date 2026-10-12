@@ -3600,3 +3600,11 @@ Evidence: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-04/generic-capture
 ## Explicit user task — 90 BPM review correction, 12 October 2026
 
 - [x] Repair the user-rejected review using take 16459396 and screenshots (SOFTWARE VERIFIED): no Height clipping, correct saved beat origin in Review/PNG, clear read-only state and guarded editing. Exact-take regression and eight rendered views PASS; scripts/build.sh all PASS (9,350 XCTest passes/124 skips, 1,064 named Swift Testing passes, 123 Python tests and all platform builds); signed universal package/ZIP verification PASS. Real saved ramps and unknowns preserved. Prior operator visual acceptance FAIL; new operator/Intel/physical acceptance NOT RUN. Authorized checkpoint/commit/push result: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-12/review-correction-16459396/GIT-RECEIPT.json. See RESULT.md for exact receipts and same-take verification.
+
+## Explicit user task — review playback cursor, 12 October 2026
+
+- [x] Implement, software-verify, package and install the moving audio-clock review playhead. All 34 required regression methods ran twice; scripts/build.sh all PASS (9,364 XCTest passes/124 skips, zero failures; 1,064 named Swift Testing passes; 123 Python passes; all builds). Fourteen rendered views PASS. The dated Review Fix app is installed and its exact running executable verified. Edited overlaps/approval guards preserved. Authorized Git completion is recorded in review-playhead-8F5DE592/GIT-RECEIPT.json.
+
+- [x] Correct false unknown controller motion while retaining decoder/confidence/camera/provenance safeguards. Exact supplied-take replay, projection, draft save/load, full gates and signed deployment PASS. A separate registered reprocessed copy restores 12 measured curves; seven low-confidence movements and four visible decoder-gap regions remain unknown. Original evidence and edits are preserved. See /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-12/review-playhead-8F5DE592/RESULT.md.
+
+- [ ] Inspect the installed Review Fix app with the corrected saved 95 BPM draft after unlocking the connected Mac. CUA live-window check blocked by locked screen; software renders and installation passed. Operator visual, Intel performance and new physical acceptance remain separate and unconfirmed.

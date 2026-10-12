@@ -1976,6 +1976,12 @@ struct ReferenceAuthoringView: View {
                             .allowsHitTesting(false)
                     }
                 }
+                .overlay {
+                    if let take = reviewTake {
+                        ReferenceReviewPlaybackOverlay(controller: viewModel.mediaReview,
+                            takeID: take.id, viewport: frame.timeRange)
+                    }
+                }
             } else {
                 ScratchPhraseChartView(
                     source: .empty(emptyMessage),
@@ -2768,6 +2774,23 @@ private struct CompanionRelaySetupView: View {
     }
 }
 
+/// Only this inexpensive leaf samples the WAV-backed player. The parent view
+/// keeps its fitted geometry stable while playback advances. Paused boundary
+/// seeks are refreshed by the controller's existing completion publication.
+private struct ReferenceReviewPlaybackOverlay: View {
+    @ObservedObject var controller: ReferenceFinalizedMediaReviewController
+    let takeID: String
+    let viewport: ClosedRange<Double>
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !controller.isPlaying)) { _ in
+            ScratchPhrasePlayhead(mediaTime: controller.currentPlaybackTime(for: takeID), viewport: viewport)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 private struct ReferenceMediaReviewStatus: View {
     @ObservedObject var controller: ReferenceFinalizedMediaReviewController
     var showsVideo = true
@@ -2844,8 +2867,9 @@ private struct ReferenceBoundaryMediaReview: View {
                 ReferenceRecordedVideo(player: player)
                     .frame(height: 180)
                     .overlay(alignment: .bottomLeading) {
-                        TimelineView(.animation(minimumInterval: 0.1)) { _ in
-                            Text(String(format: "Recorded take · %.2f s", max(0, player.currentTime().seconds)))
+                        TimelineView(.animation(minimumInterval: 0.1, paused: !controller.isPlaying)) { _ in
+                            let time = controller.currentPlaybackTime(for: take.id)
+                            Text(time.map { String(format: "Recorded take · %.2f s", $0) } ?? "Recorded take")
                                 .font(.caption.monospacedDigit()).padding(4)
                                 .background(.black.opacity(0.7)).foregroundStyle(.white)
                         }

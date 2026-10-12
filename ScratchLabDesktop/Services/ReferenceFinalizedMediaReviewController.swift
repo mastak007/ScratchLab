@@ -221,6 +221,18 @@ final class ReferenceFinalizedMediaReviewController: ObservableObject {
         }
     }
 
+    /// Read the recorded media clock without publishing display-frequency updates.
+    /// The WAV-backed player is authoritative even when no camera movie exists.
+    func currentPlaybackTime(for takeID: String) -> TimeInterval? {
+        guard canPlay, loadedTakeID == takeID,
+              let audioPlayer, audioPlayer.currentItem?.status == .readyToPlay else { return nil }
+        let time = audioPlayer.currentTime()
+        guard time.isValid, time.isNumeric else { return nil }
+        let seconds = time.seconds
+        guard seconds.isFinite, seconds >= 0 else { return nil }
+        return seconds
+    }
+
     /// Clamp an audition to measured media; an out-of-range repetition must
     /// produce an explanation instead of seeking into silence.
     static func playableRange(start: Double, end: Double, duration: Double) -> ClosedRange<Double>? {

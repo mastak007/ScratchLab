@@ -2646,27 +2646,29 @@ final class ReferenceTearCanonicalProjectionTests: XCTestCase {
         }
     }
 
-    /// A brief backward twitch (0.30 → 0.29) between two forward runs is
-    /// absorbed as sign chatter; the following forward run must still join the
-    /// measured trajectory, not re-anchor to zero.
-    func testAbsorbedChatterDoesNotReAnchorTheFollowingSameDirectionRamp() throws {
+    /// Accepted controller counter-motion retains its own measured curve;
+    /// a small take-local excursion is not a second controller noise gate.
+    func testSmallControllerReversalPreservesAllThreeConnectedRamps() throws {
         let events = [
             normalizedRun(start: 0.00, end: 0.20, direction: "forward", from: 0.00, to: 0.30),
-            normalizedRun(start: 0.20, end: 0.25, direction: "backward", from: 0.30, to: 0.29),
-            normalizedRun(start: 0.25, end: 0.60, direction: "forward", from: 0.29, to: 0.59)
+            normalizedRun(start: 0.20, end: 0.30, direction: "backward", from: 0.30, to: 0.29),
+            normalizedRun(start: 0.30, end: 0.60, direction: "forward", from: 0.29, to: 0.59)
         ]
         let projection = project(events)
 
-        XCTAssertEqual(projection.records.count, 2)
-        XCTAssertEqual(projection.records.map(\.direction), [.forward, .forward])
+        XCTAssertEqual(projection.records.count, 3)
+        XCTAssertEqual(projection.records.map(\.direction), [.forward, .backward, .forward])
 
         let firstEnd = try XCTUnwrap(lastSubdivisionEnd(projection.records[0]))
         let secondStart = try XCTUnwrap(firstSubdivisionStart(projection.records[1]))
+        let secondEnd = try XCTUnwrap(lastSubdivisionEnd(projection.records[1]))
+        let thirdStart = try XCTUnwrap(firstSubdivisionStart(projection.records[2]))
 
-        // The second ramp departs from the measured 0.29, not from zero; the
-        // 0.01 gap is exactly the absorbed chatter dip and stays unknown.
         XCTAssertEqual(firstEnd, 0.30, accuracy: 1e-9)
-        XCTAssertEqual(secondStart, 0.29, accuracy: 1e-9)
+        XCTAssertEqual(secondStart, firstEnd, accuracy: 1e-9)
+        XCTAssertEqual(secondEnd, 0.29, accuracy: 1e-9)
+        XCTAssertEqual(thirdStart, secondEnd, accuracy: 1e-9)
+        XCTAssertTrue(projection.records.allSatisfy { $0.motionValidationIssues().isEmpty })
     }
 
     /// The live preview and finalized review must draw the same REVERSAL

@@ -24636,6 +24636,78 @@ final class RaneMotionProvenanceTests: XCTestCase {
         XCTAssertEqual(review(retained).reversals.count, 1)
     }
 
+    func testAcceptedControllerReversalSurvivesUnrelatedTakeScaleInReviewAndProjection() throws {
+        // The same 80-step / .15s backward run has confidence .78 in both
+        // takes. Extra forward travel changes only its take-normalized size.
+        let raw = packets(10, count: 100, duration: 1)
+            + packets(-1, count: 80, start: 1, duration: 0.15, phase: 1_000).dropFirst()
+            + packets(10, count: 100, start: 1.15, duration: 1, phase: 920).dropFirst()
+        let expanded = raw + packets(30, count: 300, start: 2.15, duration: 3, phase: 1_920).dropFirst()
+        for (index, input) in [raw, expanded].enumerated() {
+            let decoded = CaptureCore.derivePlatterMotionEvidence(from: input)
+            let retained = normalized(input)
+            XCTAssertEqual(decoded.events.count, 3)
+            XCTAssertEqual(retained.events.count, 3)
+            XCTAssertEqual(retained.intervals, decoded.intervals)
+            XCTAssertTrue(retained.intervals.isEmpty)
+            let middle = try XCTUnwrap(retained.events.first { $0.direction == "backward" })
+            XCTAssertEqual(middle.startTime, 1, accuracy: 1e-9)
+            XCTAssertEqual(middle.endTime, 1.15, accuracy: 1e-9)
+            XCTAssertEqual(middle.confidence, 0.78, accuracy: 1e-9)
+            let excursion = abs(middle.endPosition - middle.startPosition)
+            let cutoff = ReferenceTearReviewConfiguration().maximumChatterPositionDelta
+            if index == 0 { XCTAssertGreaterThan(excursion, cutoff) }
+            else { XCTAssertLessThan(excursion, cutoff) }
+
+            let reviewed = review(retained)
+            XCTAssertEqual(reviewed.rawMovementEvents, retained.events)
+            XCTAssertEqual(reviewed.travelIntervals.compactMap(\.movementEventIndex), [0, 1, 2])
+            XCTAssertEqual(reviewed.candidates.map(\.direction), [.forward, .backward, .forward])
+            XCTAssertEqual(reviewed.reversals.count, 2)
+            XCTAssertEqual(reviewed.totalCountedTearHoldCount, 0)
+            XCTAssertFalse(reviewed.reasons.contains(.mergedDirectionChatter))
+            let projection = ReferenceTearCanonicalProjectionBuilder.project(reviewed,
+                platterTrajectorySegments: retained.trajectorySegments)
+            XCTAssertEqual(projection.records.map(\.direction), [.forward, .backward, .forward])
+            XCTAssertTrue(projection.records.allSatisfy { $0.motionValidationIssues().isEmpty })
+            let backward = try XCTUnwrap(projection.records.first { $0.direction == .backward })
+            let curve = try XCTUnwrap(backward.subdivisions.first?.measuredCurve)
+            XCTAssertEqual(try XCTUnwrap(curve.startPosition), middle.startPosition, accuracy: 1e-9)
+            XCTAssertEqual(try XCTUnwrap(curve.endPosition), middle.endPosition, accuracy: 1e-9)
+        }
+    }
+
+    func testControllerChatterBypassPreservesDecoderRejectionAndLowConfidenceUnknown() throws {
+        for steps in [4, 30] {
+            let raw = packets(10, count: 100, duration: 1)
+                + packets(-1, count: steps, start: 1, duration: 0.15, phase: 1_000).dropFirst()
+                + packets(30, count: 300, start: 1.15, duration: 3, phase: 1_000 - steps).dropFirst()
+            let result = normalized(raw)
+            let reviewed = review(result)
+            XCTAssertEqual(reviewed.rawMovementEvents, result.events)
+            XCTAssertFalse(reviewed.reasons.contains(.mergedDirectionChatter))
+            XCTAssertEqual(reviewed.totalCountedTearHoldCount, 0)
+            if steps == 4 {
+                XCTAssertEqual(result.events.count, 2)
+                XCTAssertTrue(result.intervals.contains { $0.kind == .discardedMotion && $0.signedSteps == -4 })
+                XCTAssertTrue(reviewed.segments.contains {
+                    $0.state == .unknown && $0.reasons.contains(.discardedMotion)
+                })
+            } else {
+                XCTAssertEqual(result.events.count, 3)
+                let middle = try XCTUnwrap(result.events.first { $0.direction == "backward" })
+                XCTAssertEqual(middle.confidence, 0.73, accuracy: 1e-9)
+                XCTAssertTrue(reviewed.segments.contains { $0.reasons.contains(.lowMovementConfidence) })
+                let projection = ReferenceTearCanonicalProjectionBuilder.project(reviewed,
+                    platterTrajectorySegments: result.trajectorySegments)
+                XCTAssertTrue(projection.reasons.contains(.lowMovementConfidence))
+                let backward = try XCTUnwrap(projection.records.first { $0.direction == .backward })
+                XCTAssertNil(backward.subdivisions.first?.measuredCurve)
+                XCTAssertFalse(backward.motionValidationIssues().isEmpty)
+            }
+        }
+    }
+
     func testSlowControllerTravelSurvivesFusionAndExportWithoutAudio() throws {
         // The first event exceeds the camera delta floor but falls below its
         // speed floor after a later large pull expands the coordinate range.

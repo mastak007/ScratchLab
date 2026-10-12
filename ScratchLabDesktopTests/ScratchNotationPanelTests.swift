@@ -2443,3 +2443,136 @@ final class ReferenceNotationPNGTests: XCTestCase {
         add(attachment)
     }
 }
+
+@MainActor
+final class ReferencePlaybackPlayheadTests: XCTestCase {
+    func testPlaybackCursorUsesMediaViewportWithoutApplyingBeatOriginTwice() throws {
+        let clock = try XCTUnwrap(ScratchPhraseChartView.BeatTimeline(
+            beatsPerMinute: 95, offsetSeconds: 2.407685235317331))
+        let start = clock.mediaTime(forBeat: 20)
+        let end = clock.mediaTime(forBeat: 35.75)
+        let viewport = start...end
+        XCTAssertEqual(start, 10.22389371205109, accuracy: 1e-12)
+        XCTAssertEqual(ScratchPhrasePlayhead.xPosition(mediaTime: start, viewport: viewport, width: 900), 0)
+        XCTAssertEqual(try XCTUnwrap(ScratchPhrasePlayhead.xPosition(
+            mediaTime: (start + end) / 2, viewport: viewport, width: 900)), 450, accuracy: 1e-9)
+        XCTAssertEqual(ScratchPhrasePlayhead.xPosition(mediaTime: end, viewport: viewport, width: 900), 900)
+        // Rest-context playback is outside this selected chart, not stuck at an edge.
+        XCTAssertNil(ScratchPhrasePlayhead.xPosition(mediaTime: start - 1, viewport: viewport, width: 900))
+        XCTAssertNil(ScratchPhrasePlayhead.xPosition(mediaTime: end + 1, viewport: viewport, width: 900))
+    }
+
+    func testPlaybackCursorRejectsMissingOrInvalidClockAndViewport() {
+        for time in [nil, Double.nan, .infinity, -.infinity, -1] as [Double?] {
+            XCTAssertNil(ScratchPhrasePlayhead.xPosition(mediaTime: time, viewport: 0...4, width: 900))
+        }
+        for viewport in [2.0...2.0, 0...Double.infinity, -Double.infinity...4] {
+            XCTAssertNil(ScratchPhrasePlayhead.xPosition(mediaTime: 2, viewport: viewport, width: 900))
+        }
+        for width in [CGFloat.zero, -1, .nan, .infinity] {
+            XCTAssertNil(ScratchPhrasePlayhead.xPosition(mediaTime: 2, viewport: 0...4, width: width))
+        }
+    }
+
+    func testPlaybackCursorToleratesSubpixelSeekRoundingButHidesOutsideContext() {
+        // 100 points/s makes the permitted half-point edge tolerance explicit.
+        XCTAssertEqual(ScratchPhrasePlayhead.xPosition(mediaTime: 9.9975, viewport: 10...14, width: 400), 0)
+        XCTAssertEqual(ScratchPhrasePlayhead.xPosition(mediaTime: 14.0025, viewport: 10...14, width: 400), 400)
+        XCTAssertNil(ScratchPhrasePlayhead.xPosition(mediaTime: 9.99, viewport: 10...14, width: 400))
+        XCTAssertNil(ScratchPhrasePlayhead.xPosition(mediaTime: 14.01, viewport: 10...14, width: 400))
+    }
+
+    func testPlaybackCursorMovesAcrossEveryLaneWithoutChangingSavedGeometry() throws {
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(movementEvents: [
+            .init(startTime: 0, endTime: 4, startPosition: 0, endPosition: 1,
+                direction: "forward", movementKind: .normalPush, speed: 1, confidence: 1, source: "synthetic")
+        ])
+        let frame = try XCTUnwrap(ReferenceAuthoringViewModel.canonicalFrame(for: projection, bpm: 95))
+        let originalGeometry = ScratchStrokeGeometry.canonicalGeometry(records: projection.records,
+            layer: .performance, frame: frame)
+        for time in [1.0, 2.0, 3.0] {
+            let renderer = ImageRenderer(content:
+                ScratchPhraseChartView(source: .canonical(projection.records, layer: .performance, frame: frame),
+                    bpm: 95, showsMixerFaderLanes: true, backgroundColor: .black)
+                    .frame(width: 800, height: 300)
+                    .overlay { ScratchPhrasePlayhead(mediaTime: time, viewport: frame.timeRange) })
+            renderer.scale = 1; renderer.isOpaque = true
+            let image = try XCTUnwrap(renderer.cgImage)
+            let pixels = NSBitmapImageRep(cgImage: image)
+            let x = Int(try XCTUnwrap(ScratchPhrasePlayhead.xPosition(
+                mediaTime: time, viewport: frame.timeRange, width: 800)))
+            for y in [20, 150, 230, 285] {
+                let color = try XCTUnwrap(pixels.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                XCTAssertGreaterThan(color.redComponent, 0.85, "Cursor must cross every lane")
+                XCTAssertGreaterThan(color.greenComponent, 0.85)
+                XCTAssertGreaterThan(color.blueComponent, 0.85)
+            }
+            XCTAssertEqual(ScratchStrokeGeometry.canonicalGeometry(records: projection.records,
+                layer: .performance, frame: frame), originalGeometry)
+        }
+    }
+
+    func testSupplied95BPMTakePlayheadUsesSavedEditedRangesAndPreservesEvidence() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let path = environment["SL_REVIEW_PLAYHEAD_EVIDENCE_PATH"],
+              let metadataPath = environment["SL_REVIEW_PLAYHEAD_METADATA_PATH"] else {
+            throw XCTSkip("Set the two SL_REVIEW_PLAYHEAD paths to the supplied 95 BPM evidence and review metadata.")
+        }
+        let evidenceURL = URL(fileURLWithPath: path)
+        let metadataURL = URL(fileURLWithPath: metadataPath)
+        let original = try Data(contentsOf: evidenceURL)
+        let originalMetadata = try Data(contentsOf: metadataURL)
+        let document = try ReferenceTearEvidenceCodec.decodeDocument(original)
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self,
+            from: document.sourceBinding.rawSidecarData)
+        let offset = try XCTUnwrap(sidecar.captureTiming?.recordingStartOffsetSeconds)
+        XCTAssertEqual(offset, 2.407685235317331, accuracy: 1e-12)
+        XCTAssertEqual(document.projection.records.count, 58)
+        let review = try XCTUnwrap(JSONSerialization.jsonObject(with: originalMetadata) as? [String: Any])
+        let repetitions = try XCTUnwrap(review["recordedRepetitions"] as? [[String: Any]])
+        let edited = try XCTUnwrap(repetitions.first { ($0["repetitionIndex"] as? Int) == 1 })
+        XCTAssertEqual(edited["startBeat"] as? Double, 20)
+        XCTAssertEqual(edited["endBeat"] as? Double, 35.75)
+        let start = try XCTUnwrap(edited["startSeconds"] as? Double)
+        let end = try XCTUnwrap(edited["endSeconds"] as? Double)
+        let full = try XCTUnwrap(ReferenceAuthoringViewModel.canonicalFrame(for: document.projection, bpm: 95))
+        let fitted = ReferenceMotionReviewViewport.frame(full, selectedRange: start...end,
+            zoomed: true, records: document.projection.records)
+        for (name, frame) in [("selected-repetition-2", fitted), ("whole-take", full)] {
+            for (index, fraction) in [0.15, 0.5, 0.85].enumerated() {
+                let time = frame.timeRange.lowerBound
+                    + (frame.timeRange.upperBound - frame.timeRange.lowerBound) * fraction
+                XCTAssertEqual(try XCTUnwrap(ScratchPhrasePlayhead.xPosition(
+                    mediaTime: time, viewport: frame.timeRange, width: 868)), CGFloat(fraction * 868), accuracy: 1e-9)
+                let renderer = ImageRenderer(content:
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("SAVED 95 BPM TAKE · \(name) · playback position \(index + 1)").font(.headline)
+                        Text(String(format: "Media %.3f s · original recorded curves and edited bounds", time)).font(.caption)
+                        ScratchPhraseChartView(source: .canonical(document.projection.records, layer: .performance, frame: frame),
+                            bpm: 95, beatTimelineOffsetSeconds: offset,
+                            mixerFaders: document.projection.mixerFaders, showsMixerFaderLanes: true,
+                            backgroundColor: .clear)
+                            .frame(height: 320).clipped()
+                            .overlay { ScratchPhrasePlayhead(mediaTime: time, viewport: frame.timeRange) }
+                    }
+                    .foregroundStyle(.white).padding(16).frame(width: 900)
+                    .background(Color.black).environment(\.colorScheme, .dark))
+                renderer.scale = 1; renderer.isOpaque = true
+                let image = try XCTUnwrap(renderer.cgImage)
+                let attachment = XCTAttachment(image: NSImage(cgImage: image,
+                    size: NSSize(width: CGFloat(image.width), height: CGFloat(image.height))))
+                attachment.name = "Saved-95BPM-\(name)-playhead-\(index + 1)"
+                attachment.lifetime = .keepAlways; add(attachment)
+                if let directory = environment["SL_REVIEW_PLAYHEAD_RENDER_DIRECTORY"] {
+                    let url = URL(fileURLWithPath: directory, isDirectory: true)
+                    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+                    let png = try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+                    try png.write(to: url.appendingPathComponent("\(name)-playhead-\(index + 1).png"), options: .atomic)
+                }
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: evidenceURL), original)
+        XCTAssertEqual(try Data(contentsOf: metadataURL), originalMetadata)
+    }
+}

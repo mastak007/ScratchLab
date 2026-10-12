@@ -255,7 +255,7 @@ struct ScratchPhraseChartView: View {
                 .foregroundStyle(Color(white: 0.65)), at: CGPoint(x: size.width - 4, y: 3), anchor: .topTrailing)
         }
         if showPlayhead {
-            drawPlayhead(ctx: ctx, size: size, x: CGFloat(playheadTime - start) * pps)
+            ScratchPhrasePlayhead.draw(ctx: ctx, size: size, x: CGFloat(playheadTime - start) * pps)
         }
     }
 
@@ -385,7 +385,7 @@ struct ScratchPhraseChartView: View {
         }
 
         if showPlayhead {
-            drawPlayhead(ctx: ctx, size: size,
+            ScratchPhrasePlayhead.draw(ctx: ctx, size: size,
                          x: CGFloat(playheadTime - windowStart) * pps)
         }
     }
@@ -513,7 +513,7 @@ struct ScratchPhraseChartView: View {
         drawCapturedAxisLabels(ctx: ctx, size: size, baseline: baseline, maxBand: maxBand)
 
         if showPlayhead {
-            drawPlayhead(ctx: ctx, size: size, x: CGFloat(playheadTime - windowStart) * pps)
+            ScratchPhrasePlayhead.draw(ctx: ctx, size: size, x: CGFloat(playheadTime - windowStart) * pps)
         }
     }
 
@@ -601,7 +601,7 @@ struct ScratchPhraseChartView: View {
                                pps: pps)
 
         if showPlayhead {
-            drawPlayhead(ctx: ctx, size: size, x: CGFloat(playheadTime - windowStart) * pps)
+            ScratchPhrasePlayhead.draw(ctx: ctx, size: size, x: CGFloat(playheadTime - windowStart) * pps)
         }
     }
 
@@ -1106,29 +1106,6 @@ struct ScratchPhraseChartView: View {
         )
     }
 
-    private func drawPlayhead(ctx: GraphicsContext, size: CGSize, x: CGFloat) {
-        // Soft glow so the playhead reads clearly against dense notation.
-        var glow = Path()
-        glow.move(to: CGPoint(x: x, y: 0))
-        glow.addLine(to: CGPoint(x: x, y: size.height))
-        ctx.stroke(glow, with: .color(Color.white.opacity(0.22)), lineWidth: 6)
-
-        // Main playhead line — brighter and thicker than a hairline cursor
-        // so the current timing position is obvious at arm's length.
-        var ph = Path()
-        ph.move(to: CGPoint(x: x, y: 0))
-        ph.addLine(to: CGPoint(x: x, y: size.height))
-        ctx.stroke(ph, with: .color(Color.white.opacity(0.95)), lineWidth: 2.5)
-
-        // Downward marker at the top edge anchors the eye to the playhead.
-        var marker = Path()
-        marker.move(to: CGPoint(x: x - 5, y: 0))
-        marker.addLine(to: CGPoint(x: x + 5, y: 0))
-        marker.addLine(to: CGPoint(x: x, y: 8))
-        marker.closeSubpath()
-        ctx.fill(marker, with: .color(Color.white.opacity(0.95)))
-    }
-
     private func drawEmpty(ctx: GraphicsContext, size: CGSize, message: String) {
         ctx.draw(
             Text(message)
@@ -1342,3 +1319,59 @@ enum ScratchPhraseChartComparisonDomain {
 }
 #endif // #if false
 #endif
+
+/// Playback-only overlay. Sampling the media clock must not rebuild the saved
+/// platter geometry or feed a new value through the surrounding capture form.
+struct ScratchPhrasePlayhead: View {
+    let mediaTime: TimeInterval?
+    let viewport: ClosedRange<Double>
+
+    var body: some View {
+        Canvas { context, size in
+            if let x = Self.xPosition(mediaTime: mediaTime, viewport: viewport, width: size.width) {
+                Self.draw(ctx: context, size: size, x: x)
+            }
+        }
+        .clipped()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    static func xPosition(mediaTime: TimeInterval?, viewport: ClosedRange<Double>, width: CGFloat) -> CGFloat? {
+        guard let mediaTime, mediaTime.isFinite, mediaTime >= 0,
+              viewport.lowerBound.isFinite, viewport.upperBound.isFinite,
+              width.isFinite, width > 0 else { return nil }
+        let duration = viewport.upperBound - viewport.lowerBound
+        guard duration.isFinite, duration > 0 else { return nil }
+        let x = CGFloat((mediaTime - viewport.lowerBound) / duration) * width
+        // The player's 48 kHz seek rounding can fall just outside an exact
+        // boundary. Clamp less than half a display point; real rest-context
+        // playback outside this window stays hidden, never pinned to its edge.
+        guard x.isFinite, x >= -0.5, x <= width + 0.5 else { return nil }
+        return min(width, max(0, x))
+    }
+
+    static func draw(ctx: GraphicsContext, size: CGSize, x: CGFloat) {
+        // Soft glow so the playhead reads clearly against dense notation.
+        var glow = Path()
+        glow.move(to: CGPoint(x: x, y: 0))
+        glow.addLine(to: CGPoint(x: x, y: size.height))
+        ctx.stroke(glow, with: .color(Color.white.opacity(0.22)), lineWidth: 6)
+
+        // Main playhead line — brighter and thicker than a hairline cursor
+        // so the current timing position is obvious at arm's length.
+        var ph = Path()
+        ph.move(to: CGPoint(x: x, y: 0))
+        ph.addLine(to: CGPoint(x: x, y: size.height))
+        ctx.stroke(ph, with: .color(Color.white.opacity(0.95)), lineWidth: 2.5)
+
+        // Downward marker at the top edge anchors the eye to the playhead.
+        var marker = Path()
+        marker.move(to: CGPoint(x: x - 5, y: 0))
+        marker.addLine(to: CGPoint(x: x + 5, y: 0))
+        marker.addLine(to: CGPoint(x: x, y: 8))
+        marker.closeSubpath()
+        ctx.fill(marker, with: .color(Color.white.opacity(0.95)))
+    }
+
+}

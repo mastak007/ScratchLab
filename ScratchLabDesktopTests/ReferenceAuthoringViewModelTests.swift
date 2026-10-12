@@ -4,6 +4,7 @@
 import XCTest
 import AVFoundation
 import AppKit
+import Combine
 import SwiftUI
 @testable import ScratchLab
 
@@ -356,22 +357,48 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
     }
 
     func testWholeTakePlaybackAdvancesAfterSeek() async throws {
-        let files = try await fixture([])
+        let files = try await fixture(Self.packets(1, start: 2, duration: 0.5))
         let take = try await record(worker([files]))
         let controller = ReferenceFinalizedMediaReviewController()
+        XCTAssertNil(controller.currentPlaybackTime(for: take.id))
         controller.load(take: take, mediaURL: files.mediaURL, beatRootURL: nil)
+        XCTAssertNil(controller.currentPlaybackTime(for: take.id), "Loading must not expose a stale clock.")
         for _ in 0..<100 where controller.state == .loading {
             try await Task.sleep(for: .milliseconds(50))
         }
         XCTAssertTrue(controller.canPlay)
         let player = try XCTUnwrap(controller.videoPlayer)
         player.isMuted = true
+        defer { controller.stop() }
         controller.playWholeTake()
         for _ in 0..<100 where player.currentTime().seconds < 0.2 {
             try await Task.sleep(for: .milliseconds(50))
         }
         XCTAssertGreaterThan(player.currentTime().seconds, 0.15)
+        let clock = try XCTUnwrap(controller.currentPlaybackTime(for: take.id))
+        XCTAssertGreaterThan(clock, 0.15)
+        XCTAssertEqual(clock, player.currentTime().seconds, accuracy: 0.01)
+        XCTAssertNil(controller.currentPlaybackTime(for: "different-take"))
+
+        var observationCount = 0
+        let observation = controller.objectWillChange.sink { observationCount += 1 }
+        defer { observation.cancel() }
+        for _ in 0..<100 {
+            XCTAssertNotNil(controller.currentPlaybackTime(for: take.id))
+            XCTAssertNil(controller.currentPlaybackTime(for: "different-take"))
+        }
+        XCTAssertEqual(observationCount, 0, "Reading the clock must not invalidate the surrounding review UI.")
         controller.stop()
+        XCTAssertGreaterThan(observationCount, 0, "Stopping still publishes its existing state change.")
+        XCTAssertEqual(controller.state, .stopped)
+        XCTAssertEqual(player.rate, 0)
+        let stoppedClock = try XCTUnwrap(controller.currentPlaybackTime(for: take.id))
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(try XCTUnwrap(controller.currentPlaybackTime(for: take.id)), stoppedClock, accuracy: 0.001)
+        XCTAssertEqual(stoppedClock, player.currentTime().seconds, accuracy: 0.001)
+
+        player.replaceCurrentItem(with: nil)
+        XCTAssertNil(controller.currentPlaybackTime(for: take.id), "A removed player item has no review clock.")
     }
 
     func testLateWatchStopTimeoutStillExportsExactRawCaptureAndReview() async throws {
@@ -805,15 +832,35 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         controller.previewBoundary(boundary, take: take)
         try await waitForPlayer(player, at: start)
         XCTAssertEqual(player.rate, 0)
+        XCTAssertEqual(try XCTUnwrap(controller.currentPlaybackTime(for: take.id)), start, accuracy: 0.01)
         controller.previewBoundary(boundary, take: take, atEnd: true)
         try await waitForPlayer(player, at: end - 1 / 30)
         XCTAssertEqual(player.rate, 0)
+        XCTAssertEqual(try XCTUnwrap(controller.currentPlaybackTime(for: take.id)), end - 1 / 30, accuracy: 0.01)
+
+        controller.play(repetition: boundary, take: take)
+        let repetitionDeadline = Date().addingTimeInterval(5)
+        while controller.state != .playing(repetition: boundary.index), Date() < repetitionDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(controller.state, .playing(repetition: boundary.index))
+        let repetitionClock = try XCTUnwrap(controller.currentPlaybackTime(for: take.id))
+        XCTAssertGreaterThanOrEqual(repetitionClock, start - 0.01)
+        XCTAssertLessThan(repetitionClock, end)
+        XCTAssertEqual(repetitionClock, player.currentTime().seconds, accuracy: 0.01)
+        XCTAssertEqual(player.currentItem?.forwardPlaybackEndTime.seconds ?? -1, end, accuracy: 0.001)
+        controller.stop()
+
         controller.play(repetition: boundary, take: take, contextBeats: 4)
         let playingDeadline = Date().addingTimeInterval(5)
         while controller.state != .playing(repetition: boundary.index), Date() < playingDeadline {
             try await Task.sleep(for: .milliseconds(20))
         }
         XCTAssertEqual(controller.state, .playing(repetition: boundary.index))
+        let contextClock = try XCTUnwrap(controller.currentPlaybackTime(for: take.id))
+        XCTAssertGreaterThanOrEqual(contextClock, max(0, start - 4 * 60 / Double(take.evidence.metadata.bpm)) - 0.01)
+        XCTAssertLessThan(contextClock, start, "Rest context must report media time before the selected repetition.")
+        XCTAssertEqual(contextClock, player.currentTime().seconds, accuracy: 0.01)
         XCTAssertEqual(player.currentItem?.forwardPlaybackEndTime.seconds ?? -1,
             min(controller.durationSeconds, end + 4 * 60 / Double(take.evidence.metadata.bpm)), accuracy: 0.001)
         controller.stop()
@@ -822,6 +869,7 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         controller.previewBoundary(boundary, take: take, atEnd: true)
         try await waitForPlayer(player, at: end - 1 / 30)
         XCTAssertEqual(player.rate, 0)
+        XCTAssertEqual(try XCTUnwrap(controller.currentPlaybackTime(for: take.id)), end - 1 / 30, accuracy: 0.01)
         XCTAssertEqual(try Data(contentsOf: files.mediaURL), originalMovie)
         XCTAssertEqual(try Data(contentsOf: files.sidecarURL), files.sidecarData)
     }
@@ -2365,6 +2413,16 @@ final class ReferenceAuthoringViewModelTests: XCTestCase {
         XCTAssertTrue(controller.canPlay)
         XCTAssertNotNil(controller.beatBindingIssue, "Playback must not silently satisfy beat approval.")
         XCTAssertNil(controller.boundBeatID)
+        XCTAssertNil(controller.videoPlayer)
+        let clockReady = await waitUntil { controller.currentPlaybackTime(for: take.id) != nil }
+        XCTAssertTrue(clockReady, "A WAV-only take must provide the audio player's clock.")
+        XCTAssertNil(controller.currentPlaybackTime(for: "different-take"))
+        // This fixture contains only zero PCM samples, so the real-player check is silent.
+        controller.playWholeTake()
+        let clockAdvanced = await waitUntil { (controller.currentPlaybackTime(for: take.id) ?? 0) > 0.05 }
+        XCTAssertTrue(clockAdvanced)
+        controller.stop()
+        XCTAssertNotNil(controller.currentPlaybackTime(for: take.id))
         let model = ReferenceAuthoringViewModel(worker: worker, initialState: stopped.state)
         model.mediaReview.load(take: take, mediaURL: mediaURL, beatRootURL: nil)
         _ = await waitUntil { model.mediaReview.state != .loading }
@@ -2396,6 +2454,7 @@ final class ReferenceAuthoringViewModelTests: XCTestCase {
         XCTAssertFalse(controller.canPlay)
         XCTAssertNil(controller.videoPlayer)
         XCTAssertNil(controller.beatBindingIssue)
+        XCTAssertNil(controller.currentPlaybackTime(for: take.id), "A missing-media load must clear the old player's clock.")
     }
 
     func testReviewRangesCannotSeekBeyondTheMeasuredTake() {
