@@ -5276,6 +5276,108 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
         XCTAssertEqual(detail.pageIndex(at: .nan), 0)
     }
 
+    func testRecordedTravelDefaultPreservesUnequalDurationsAndSlopeRatios() throws {
+        // Unequal excursion AND duration exposes the old per-direction gain:
+        // returning farther in less time must keep its fivefold mean slope.
+        let records = [motion(id: "slow-forward", time: 0.1...0.7, start: 0, end: 0.2),
+                       motion(id: "fast-return", time: 0.7...0.85, start: 0.2, end: -0.05),
+                       motion(id: "later-release", time: 8...12, start: -0.05, end: 4)]
+        let frame = try XCTUnwrap(ScratchStrokeGeometry.CanonicalFrame(timeRange: 0...12,
+            positionRange: -1...5, coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 95))
+        let request = ReferenceMotionDetailPages.Request(records: records, fullFrame: frame,
+            mixerFaders: nil, samplePlayback: nil, showBeatGrid: true, beatOffset: 0, selectedRange: 0...8)
+        XCTAssertFalse(request.enhancesMovement)
+        let page = try XCTUnwrap(ReferenceMotionDetailPages.prepare(request).pages.first)
+        XCTAssertFalse(page.isMovementDetail)
+        XCTAssertEqual(page.chart.frame.timeRange, 0...8)
+        let segments = page.chart.geometry.motion.segments
+        XCTAssertEqual(segments.count, 2)
+        XCTAssertEqual(segments.map(\.startTime), [0.1, 0.7])
+        XCTAssertEqual(segments.map(\.endTime), [0.7, 0.85])
+        let forwardSpeed = Double(segments[0].travel) / segments[0].duration
+        let returnSpeed = Double(segments[1].travel) / segments[1].duration
+        XCTAssertEqual(returnSpeed / forwardSpeed, 5, accuracy: 1e-10)
+    }
+
+    func testPinnedInspectionKeepsMainRangeAndUsesOneScale() throws {
+        let records = [motion(id: "slow-forward", time: 0.1...0.7, start: 0, end: 0.2),
+                       motion(id: "fast-return", time: 0.7...0.85, start: 0.2, end: -0.05),
+                       motion(id: "release", time: 3...12, start: -0.05, end: 4)]
+        let frame = try XCTUnwrap(ScratchStrokeGeometry.CanonicalFrame(timeRange: 0...12,
+            positionRange: -1...5, coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 95))
+        var source = ReferenceMotionDetailPages.Request(records: records, fullFrame: frame,
+            mixerFaders: nil, samplePlayback: nil, showBeatGrid: true, beatOffset: 0, selectedRange: 0...1)
+        // Inspection retains recorded geometry even if optional emphasis is on.
+        source.enhancesMovement = true
+        let main = ReferenceMotionDetailPages.prepare(source)
+        let pinned = try XCTUnwrap(ReferenceMotionDetailPages.InspectionRequest(
+            takeID: "take-a", mediaTime: 0.4, source: source))
+        let closeUp = try XCTUnwrap(ReferenceMotionDetailPages.prepareInspection(pinned))
+        XCTAssertEqual(pinned.range, 0...2)
+        XCTAssertEqual(closeUp.chart.frame.timeRange, 0...2)
+        XCTAssertFalse(closeUp.isMovementDetail)
+        XCTAssertTrue(closeUp.resets.isEmpty)
+        XCTAssertEqual(closeUp.chart.geometry.missingMotion, [0...0.1, 0.85...2])
+        let segments = closeUp.chart.geometry.motion.segments
+        XCTAssertEqual(segments.count, 2)
+        let forwardSpeed = Double(segments[0].travel) / segments[0].duration
+        let returnSpeed = Double(segments[1].travel) / segments[1].duration
+        XCTAssertEqual(returnSpeed / forwardSpeed, 5, accuracy: 1e-10)
+        XCTAssertEqual(main.pages.first?.chart.frame.timeRange, 0...8)
+        XCTAssertEqual(ReferenceMotionDetailPages.prepare(source), main,
+                       "Opening close-up must not shorten or reframe the main repetition")
+        XCTAssertEqual(source.records, records)
+        XCTAssertEqual(main.overview, .init(records: records, layer: .performance, frame: frame))
+    }
+
+    func testPinnedInspectionBoundsAndIdentityRejectInvalidTime() throws {
+        let frame = try XCTUnwrap(ScratchStrokeGeometry.CanonicalFrame(timeRange: 0...20,
+            positionRange: 0...1, coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 95))
+        let source = ReferenceMotionDetailPages.Request(records: [], fullFrame: frame,
+            mixerFaders: nil, samplePlayback: nil, showBeatGrid: true, beatOffset: 0)
+        for (time, expected) in [(0.0, 0.0...2.0), (0.4, 0...2), (8.5, 7.5...9.5), (20, 18...20)] {
+            let pinned = try XCTUnwrap(ReferenceMotionDetailPages.InspectionRequest(
+                takeID: "take-a", mediaTime: time, source: source))
+            XCTAssertEqual(pinned.range, expected)
+            XCTAssertTrue(pinned.matches(takeID: "take-a", source: source))
+            XCTAssertFalse(pinned.matches(takeID: "take-b", source: source))
+            var changed = source
+            changed.selectedRange = 4...12
+            XCTAssertFalse(pinned.matches(takeID: "take-a", source: changed))
+        }
+        let invalidTimes: [Double?] = [nil, .nan, .infinity, -.infinity, -0.001, 20.001]
+        for time in invalidTimes {
+            XCTAssertNil(ReferenceMotionDetailPages.InspectionRequest(takeID: "take-a", mediaTime: time, source: source))
+        }
+        XCTAssertNil(ReferenceMotionDetailPages.InspectionRequest(takeID: "", mediaTime: 1, source: source))
+        let short = try XCTUnwrap(ScratchStrokeGeometry.CanonicalFrame(timeRange: 0...0.8,
+            positionRange: 0...1, coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 95))
+        let shortSource = ReferenceMotionDetailPages.Request(records: [], fullFrame: short,
+            mixerFaders: nil, samplePlayback: nil, showBeatGrid: false, beatOffset: 0)
+        XCTAssertEqual(ReferenceMotionDetailPages.InspectionRequest(
+            takeID: "short", mediaTime: 0.4, source: shortSource)?.range, 0...0.8)
+    }
+
+    func testPinnedInspectionPreparationStaysOutsidePlaybackTimeline() throws {
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("ScratchLabDesktop/Views/ReferenceAuthoringView.swift"), encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "private struct ReferenceMotionDetailView: View"))
+        let end = try XCTUnwrap(source.range(of: "private struct ReferenceMediaReviewStatus: View"))
+        let review = String(source[start.lowerBound..<end.lowerBound])
+        XCTAssertFalse(review.contains("TimelineView("), "Only the inexpensive playhead overlay owns playback ticks")
+        XCTAssertTrue(review.contains(".task(id: currentInspection)"))
+        XCTAssertTrue(review.contains(".onChange(of: request)"))
+        XCTAssertTrue(review.contains("self.inspectionRequest = nil"),
+            "An invalidated pin must be discarded, so toggling the old source back cannot resurrect it")
+        XCTAssertTrue(review.contains("ReferenceMotionDetailPages.prepareInspection(input)"))
+        XCTAssertTrue(review.contains("input.matches(takeID: takeID, source: request)"))
+        XCTAssertTrue(review.contains("preparedInspectionRequest == inspection"))
+        XCTAssertTrue(review.contains("let time = controller.currentPlaybackTime(for: takeID)"))
+        XCTAssertTrue(review.contains("controller.stop()"))
+        XCTAssertTrue(source.contains(".id(take.id)"), "Switching take must discard any pinned inspection state")
+    }
+
     func testMovementDetailToggleImprovesSmallStrokesWithoutChangingTimeOrOverview() throws {
         let records = [
             motion(id: "small-forward", time: 0...0.5, start: 0, end: 0.1),
@@ -5288,7 +5390,7 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
             positionRange: 0...21, coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 95))
         var request = ReferenceMotionDetailPages.Request(records: records, fullFrame: full,
             mixerFaders: nil, samplePlayback: nil, showBeatGrid: true, beatOffset: 2.4,
-            selectedRange: 0...8)
+            selectedRange: 0...8, enhancesMovement: true)
         let detail = ReferenceMotionDetailPages.prepare(request)
         request.enhancesMovement = false
         let travel = ReferenceMotionDetailPages.prepare(request)
@@ -5351,7 +5453,8 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
         XCTAssertFalse(detail.pages[0].chart.geometry.motion.segments.contains { $0.startTime < 1 && $0.endTime > 1 },
                        "A recorded loop must not draw a fabricated return stroke")
         let enhanced = ReferenceMotionDetailPages.prepare(.init(records: records, fullFrame: frame,
-            mixerFaders: nil, samplePlayback: timeline, showBeatGrid: true, beatOffset: 0))
+            mixerFaders: nil, samplePlayback: timeline, showBeatGrid: true, beatOffset: 0,
+            enhancesMovement: true))
         let enhancedPage = try XCTUnwrap(enhanced.pages.first)
         XCTAssertTrue(enhancedPage.isMovementDetail)
         XCTAssertTrue(enhanced.usesSamplePosition)
@@ -5411,6 +5514,96 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
                 XCTAssertEqual(detail.pageIndex(at: 100), 0)
             }
         }
+    }
+
+    func testSupplied95BPMDefaultAndInspectionPreserveMeasuredSlopeRatios() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let path = environment["SL_CENTRED_REVIEW_DRAFT_PATH"] else {
+            throw XCTSkip("Supply the registered corrected 95 BPM draft for measured motion regression.")
+        }
+        let original = try Data(contentsOf: URL(fileURLWithPath: path))
+        struct Envelope: Decodable { let payload: Data; let sha256: String }
+        let envelope = try JSONDecoder().decode(Envelope.self, from: original)
+        XCTAssertEqual(ReferencePackageIO.sha256Hex(envelope.payload), envelope.sha256)
+        let draft = try JSONDecoder().decode(ReferenceSavedDraft.self, from: envelope.payload)
+        XCTAssertEqual(draft.id, "derived-controller-3986b49c-6049-48c4-9541-6b9ab0260bbc")
+        XCTAssertEqual(draft.projection.records.count, 77)
+        let originalFrame = try XCTUnwrap(ReferenceAuthoringViewModel.canonicalFrame(for: draft.projection, bpm: 95))
+        let duration = try XCTUnwrap(draft.evidence.metadata.witnessedTiming?.measuredWAVDurationSeconds)
+        let full = try XCTUnwrap(ScratchStrokeGeometry.CanonicalFrame(timeRange: 0...duration,
+            positionRange: originalFrame.positionRange, coordinateSpace: originalFrame.coordinateSpace,
+            beatsPerMinute: 95))
+        let source = ReferenceMotionDetailPages.Request(records: draft.projection.records, fullFrame: full,
+            mixerFaders: draft.projection.mixerFaders, samplePlayback: nil, showBeatGrid: true,
+            beatOffset: draft.evidence.metadata.mediaTimeOrigin?.recordingStartOffsetSeconds ?? 0,
+            selectedRange: 0...8)
+        let main = try XCTUnwrap(ReferenceMotionDetailPages.prepare(source).pages.first)
+        let pinned = try XCTUnwrap(ReferenceMotionDetailPages.InspectionRequest(
+            takeID: draft.id, mediaTime: 0.4, source: source))
+        let inspection = try XCTUnwrap(ReferenceMotionDetailPages.prepareInspection(pinned))
+        let forward = try XCTUnwrap(draft.projection.records[0].subdivisions.first?.measuredCurve)
+        let backward = try XCTUnwrap(draft.projection.records[1].subdivisions.first?.measuredCurve)
+        XCTAssertEqual(forward.points.count, 254)
+        XCTAssertEqual(backward.points.count, 324)
+        XCTAssertEqual(forward.points.first?.time ?? -1, 0.13377147303253878, accuracy: 1e-12)
+        XCTAssertEqual(forward.points.last?.time ?? -1, 0.42413488969032187, accuracy: 1e-12)
+        XCTAssertEqual(backward.points.last?.time ?? -1, 0.8868243480246747, accuracy: 1e-12)
+        func interpolated(_ points: [Record.CurvePoint], at time: Double) -> Double {
+            for (left, right) in zip(points, points.dropFirst()) where time >= left.time && time <= right.time {
+                let fraction = (time - left.time) / (right.time - left.time)
+                return left.position + fraction * (right.position - left.position)
+            }
+            return points.last!.position
+        }
+        // Same bounded 40 ms interval beginning at each recorded vertex; never
+        // crosses the reversal, a missing interval or the end of the run.
+        func peak(_ points: [Record.CurvePoint], position: (Double) -> Double) -> Double {
+            let end = points.last!.time
+            return points.filter { $0.time + 0.04 <= end }.map {
+                abs(position($0.time + 0.04) - position($0.time)) / 0.04
+            }.max() ?? 0
+        }
+        let originalRatio = peak(backward.points) { interpolated(backward.points, at: $0) }
+            / peak(forward.points) { interpolated(forward.points, at: $0) }
+        XCTAssertGreaterThan(originalRatio, 1.3)
+        XCTAssertLessThan(originalRatio, 1.4)
+        for page in [main, inspection] {
+            XCTAssertFalse(page.isMovementDetail)
+            let motion = page.chart.geometry.motion
+            let renderedRatio = peak(backward.points) { Double(motion.position(at: $0)) }
+                / peak(forward.points) { Double(motion.position(at: $0)) }
+            XCTAssertEqual(renderedRatio, originalRatio, accuracy: 1e-9,
+                "The old per-run display gain reduced this recorded ratio to about 1.126")
+            let lower = page.chart.frame.positionRange.lowerBound
+            let span = page.chart.frame.positionRange.upperBound - lower
+            for point in forward.points + backward.points {
+                XCTAssertEqual(Double(motion.position(at: point.time)), (point.position - lower) / span,
+                    accuracy: 1e-10, "Every measured vertex must use the same linear height transform")
+            }
+        }
+        XCTAssertEqual(main.chart.frame.timeRange, 0...8)
+        XCTAssertEqual(inspection.chart.frame.timeRange, 0...2)
+        let renderer = ImageRenderer(content:
+            VStack(alignment: .leading, spacing: 8) {
+                Text("SAVED 95 BPM TAKE · RECORDED TRAVEL CLOSE-UP").font(.headline)
+                Text("0.00–2.00 s · one shared linear height scale · measured points").font(.caption)
+                ScratchPhraseChartView(source: .preparedCanonical(inspection.chart), bpm: 95,
+                    beatTimelineOffsetSeconds: source.beatOffset, showsMixerFaderLanes: true,
+                    reviewDetail: true, backgroundColor: .clear)
+                    .frame(height: 300)
+                Text("Full repetition remains visible separately · no new loop/reset evidence").font(.caption)
+            }
+            .foregroundStyle(.white).padding(16).frame(width: 1000)
+            .background(Color.black).environment(\.colorScheme, .dark))
+        renderer.scale = 1; renderer.isOpaque = true
+        let image = try XCTUnwrap(renderer.cgImage)
+        if let directory = environment["SL_REVIEW_PLAYHEAD_RENDER_DIRECTORY"] {
+            let url = URL(fileURLWithPath: directory, isDirectory: true)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            let png = try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+            try png.write(to: url.appendingPathComponent("saved-95bpm-first-pair-linear.png"), options: .atomic)
+        }
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), original)
     }
 
     func testSupplied95BPMTakeDetailShowsCompleteRepetitionsAndPreservesUnknowns() throws {
@@ -5492,7 +5685,7 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
                     Text("\(page.chart.frame.timeRange.lowerBound, specifier: "%.2f")–\(page.chart.frame.timeRange.upperBound, specifier: "%.2f") s · restart timing not recorded")
                         .font(.caption)
                     if page.isMovementDetail {
-                        Text("Movement detail · long travel compressed; timing and direction unchanged").font(.caption)
+                        Text("Movement detail · movement heights changed; slopes cannot compare speed").font(.caption)
                     }
                     ScratchPhraseChartView(source: .preparedCanonical(page.chart), bpm: 95,
                         beatTimelineOffsetSeconds: sidecar.captureTiming?.recordingStartOffsetSeconds ?? 0,

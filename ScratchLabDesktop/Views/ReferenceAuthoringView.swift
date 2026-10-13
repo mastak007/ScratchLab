@@ -58,7 +58,7 @@ struct ReferenceAuthoringView: View {
     @State private var expandedTearGroupIDs: Set<String>?
     /// Inspection focus is local to this view and never selects an approval.
     @State private var motionReviewFocus: ReferenceMotionReviewFocus?
-    @State private var reviewMovementDetail = true
+    @State private var reviewMovementDetail = false
     /// The EXISTING session-archive pipeline, reused verbatim for the raw
     /// diagnostic export. This screen adds no second archive format.
     @StateObject private var exportCoordinator = SessionExportCoordinator()
@@ -184,6 +184,7 @@ struct ReferenceAuthoringView: View {
         )
         .onChange(of: viewModel.reviewedTake?.id) { _, _ in
             motionReviewFocus = nil
+            reviewMovementDetail = false
         }
         .onChange(of: viewModel.reviewedTake?.evidence.boundaries.repetitions) { _, _ in
             // A trim changes the inspected window; restore the compact chart height.
@@ -1962,8 +1963,8 @@ struct ReferenceAuthoringView: View {
                         .font(.caption)
                         if zoomed {
                             Picker("Display", selection: $reviewMovementDetail) {
-                                Text("Movement detail").tag(true)
                                 Text("Recorded travel").tag(false)
+                                Text("Movement detail").tag(true)
                             }
                             .pickerStyle(.segmented).frame(maxWidth: 330)
                         }
@@ -2856,8 +2857,45 @@ struct ReferenceMotionDetailPages: Equatable, Sendable {
         let beatOffset: Double
         var unavailableReason: String? = nil
         var selectedRange: ClosedRange<Double>? = nil
-        var enhancesMovement: Bool = true
+        var enhancesMovement: Bool = false
     }
+    /// An explicit, pinned inspection request. Only the button captures the
+    /// owned WAV time; playback ticks never enter this preparation identity.
+    struct InspectionRequest: Equatable, Sendable {
+        let takeID: String
+        let range: ClosedRange<Double>
+        let source: Request
+
+        init?(takeID: String, mediaTime: Double?, source: Request) {
+            let available = source.fullFrame.timeRange
+            guard !takeID.isEmpty, let mediaTime, mediaTime.isFinite,
+                  available.contains(mediaTime) else { return nil }
+            let duration = min(2, available.upperBound - available.lowerBound)
+            let start = max(available.lowerBound, min(mediaTime - duration / 2, available.upperBound - duration))
+            let end = min(available.upperBound, start + duration)
+            guard start.isFinite, end.isFinite, end > start else { return nil }
+            self.takeID = takeID
+            self.range = start...end
+            self.source = source
+        }
+
+        func matches(takeID: String, source: Request) -> Bool {
+            self.takeID == takeID && self.source == source
+        }
+    }
+
+    /// Use one affine vertical fit for every measured point in this window.
+    /// Close-up is always recorded platter travel, including when the main
+    /// view has explicitly selected non-metric emphasis or sample position.
+    static func prepareInspection(_ request: InspectionRequest) -> Page? {
+        guard !Task.isCancelled else { return nil }
+        let source = request.source
+        let frame = ReferenceMotionReviewViewport.frame(source.fullFrame,
+            selectedRange: request.range, zoomed: true, records: source.records)
+        return .init(chart: .init(records: source.records, layer: .performance,
+            frame: frame, mixerFaders: source.mixerFaders), resets: [])
+    }
+
     struct Page: Equatable, Sendable {
         let chart: ScratchStrokeGeometry.PreparedCanonicalChart
         let resets: [ScratchStrokeGeometry.PlaybackResetMarker]
@@ -2911,13 +2949,36 @@ private struct ReferenceMotionDetailView: View {
     let commitBoundary: (ReferenceRepetitionBoundary) -> Void
     @State private var prepared: ReferenceMotionDetailPages?
     @State private var preparedTakeID: String?
+    @State private var inspectionRequest: ReferenceMotionDetailPages.InspectionRequest?
+    @State private var preparedInspectionRequest: ReferenceMotionDetailPages.InspectionRequest?
+    @State private var preparedInspection: ReferenceMotionDetailPages.Page?
+
+    private var currentInspection: ReferenceMotionDetailPages.InspectionRequest? {
+        guard let inspectionRequest, inspectionRequest.matches(takeID: takeID, source: request) else { return nil }
+        return inspectionRequest
+    }
 
     var body: some View {
         Group {
             if let prepared, preparedTakeID == takeID, let page = prepared.pages.first {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Visible \(page.chart.frame.timeRange.lowerBound, specifier: "%.2f")–\(page.chart.frame.timeRange.upperBound, specifier: "%.2f") s")
-                        .font(.caption).monospacedDigit()
+                    HStack {
+                        Text("Visible \(page.chart.frame.timeRange.lowerBound, specifier: "%.2f")–\(page.chart.frame.timeRange.upperBound, specifier: "%.2f") s")
+                            .monospacedDigit()
+                        Spacer()
+                        Button("Inspect at playhead") {
+                            // Read once with the controller's exact loaded-take
+                            // guard, then pause. A stale player returns nil.
+                            let time = controller.currentPlaybackTime(for: takeID)
+                            controller.stop()
+                            inspectionRequest = .init(takeID: takeID, mediaTime: time, source: request)
+                        }
+                        .disabled(controller.currentPlaybackTime(for: takeID) == nil)
+                        if currentInspection != nil {
+                            Button("Hide close-up") { inspectionRequest = nil }
+                        }
+                    }
+                    .font(.caption)
                     ScratchPhraseChartView(source: .preparedCanonical(page.chart),
                         bpm: request.fullFrame.beatsPerMinute, showBeatGrid: request.showBeatGrid,
                         beatTimelineOffsetSeconds: request.beatOffset,
@@ -2942,11 +3003,13 @@ private struct ReferenceMotionDetailView: View {
                             ReferenceReviewPlaybackOverlay(controller: controller,
                                 takeID: takeID, viewport: page.chart.frame.timeRange)
                         }
-                    if page.isMovementDetail {
-                        Text("Movement detail · long travel compressed; timing and direction unchanged")
-                            .font(.caption2).foregroundStyle(.secondary)
-                    } else if request.enhancesMovement {
-                        Text("Recorded travel shown · movement detail unavailable for this evidence")
+                    Text(page.isMovementDetail
+                        ? "Movement detail changes each movement’s height. Do not compare speed from slopes between movements."
+                        : "Recorded travel · one shared scale: gentler slopes mean slower movement; steeper slopes mean faster movement.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .frame(minHeight: 28, alignment: .topLeading)
+                    if request.enhancesMovement && !page.isMovementDetail {
+                        Text("Movement detail is unavailable for this evidence; recorded travel is shown.")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                     Text(prepared.usesSamplePosition
@@ -2984,6 +3047,9 @@ private struct ReferenceMotionDetailView: View {
                             ReferenceReviewPlaybackOverlay(controller: controller,
                                 takeID: takeID, viewport: request.fullFrame.timeRange)
                         }
+                    if let inspection = currentInspection {
+                        inspectionChart(inspection)
+                    }
                 }
             } else {
                 Text("Preparing repetition notation…")
@@ -3000,6 +3066,57 @@ private struct ReferenceMotionDetailView: View {
             preparedTakeID = takeID
             prepared = result
         }
+        .onChange(of: request) { _, source in
+            // Discard the pin, rather than merely hiding it: returning to a
+            // previous display mode or boundary must not resurrect old focus.
+            if let inspectionRequest, !inspectionRequest.matches(takeID: takeID, source: source) {
+                self.inspectionRequest = nil
+            }
+        }
+        .task(id: currentInspection) {
+            guard let input = currentInspection else {
+                preparedInspection = nil
+                preparedInspectionRequest = nil
+                return
+            }
+            let work = Task.detached(priority: .userInitiated) {
+                ReferenceMotionDetailPages.prepareInspection(input)
+            }
+            let result = await withTaskCancellationHandler(operation: { await work.value },
+                onCancel: { work.cancel() })
+            guard !Task.isCancelled, input.matches(takeID: takeID, source: request) else { return }
+            preparedInspectionRequest = input
+            preparedInspection = result
+        }
+    }
+
+    private func inspectionChart(_ inspection: ReferenceMotionDetailPages.InspectionRequest) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("RECORDED TRAVEL CLOSE-UP · \(inspection.range.lowerBound, specifier: "%.2f")–\(inspection.range.upperBound, specifier: "%.2f") s")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(.secondary)
+            Text("Pinned view · one shared height scale. Gentler slopes are slower; steeper slopes are faster.")
+                .font(.caption2).foregroundStyle(.secondary)
+            Group {
+                if preparedInspectionRequest == inspection, let page = preparedInspection {
+                    ScratchPhraseChartView(source: .preparedCanonical(page.chart),
+                        bpm: request.fullFrame.beatsPerMinute, showBeatGrid: request.showBeatGrid,
+                        beatTimelineOffsetSeconds: request.beatOffset,
+                        showsMixerFaderLanes: true, reviewDetail: true, backgroundColor: .clear)
+                        .overlay {
+                            ReferenceReviewPlaybackOverlay(controller: controller,
+                                takeID: takeID, viewport: inspection.range)
+                        }
+                } else {
+                    Text("Preparing recorded travel close-up…")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .frame(height: 240)
+            .clipped()
+        }
+        .padding(.top, 6)
     }
 }
 

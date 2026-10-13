@@ -1,3 +1,7 @@
+## Current explicit user task — recorded motion fidelity, 13 October 2026
+
+- [x] Correct default review’s per-direction gain distortion with a common linear trace and optional pinned close-up, retaining the full repetition/eight-second context. Actual95BPM slope regression, focused/full software gates, all-platform builds, signed installation and installed playback/inspection/body/edge/narrow/no-jump/reopen checks PASS. All55 original review files preserved; separate test clone retained. See motion-fidelity-audit/RESULT.md. Physical/audio alignment, Intel responsiveness and user visual acceptance remain separate unconfirmed observations.
+
 <!-- all-capture-checkpoint-20261012 begin -->
 ## Current explicit user task — all Capture checkpoint, 12 October 2026
 
