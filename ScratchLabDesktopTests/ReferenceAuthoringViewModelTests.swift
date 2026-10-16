@@ -5199,6 +5199,143 @@ final class ReferenceAuthoringCalibrationReuseAndExportTests: XCTestCase {
 final class ReferenceMotionReviewViewportTests: XCTestCase {
     private typealias Record = ScratchNotation.GestureRecord
 
+    private func readoutMotion(id: String, points: [(Double, Double)],
+                               source: ScratchNotationEvidenceSource = .platterTimeline,
+                               coordinate: Record.CoordinateSpace = .normalizedTakeLocalDisplacement) -> Record {
+        let evidence = Record.Evidence(provenance: .measured,
+            observation: .init(source: source, confidence: 0.95,
+                reason: "readout_fixture", rawSampleCount: points.count))
+        return Record(id: id, direction: points.last!.1 > points.first!.1 ? .forward : .backward,
+            timingDomain: .seconds, coordinateSpace: coordinate, evidence: evidence,
+            subdivisions: [.init(id: "\(id)-curve",
+                span: .init(startTime: points.first!.0, endTime: points.last!.0), evidence: evidence,
+                measuredCurve: .init(points: points.map { .init(time: $0.0, position: $0.1) }, evidence: evidence))])
+    }
+
+    func testRecordedMotionReadoutDistinguishesDurationMeanAndPeak() throws {
+        let forward = readoutMotion(id: "forward", points: [(0, 0), (0.3, 1)])
+        let backward = readoutMotion(id: "backward", points: [(0.3, 1), (0.6, 0.8), (0.7, -0.3)])
+        let readout = ScratchStrokeGeometry.RecordedMotionReadout(records: [forward, backward],
+            coordinateSpace: .normalizedTakeLocalDisplacement)
+        let first = try XCTUnwrap(readout.at(0))
+        let second = try XCTUnwrap(readout.at(0.3))
+        XCTAssertEqual(first.span.duration, 0.3, accuracy: 1e-12)
+        XCTAssertEqual(second.span.duration, 0.4, accuracy: 1e-12)
+        XCTAssertEqual(second.direction, .backward)
+        XCTAssertEqual(second.previousDirection, .forward)
+        XCTAssertEqual(try XCTUnwrap(second.meanRatio), 0.975, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(second.peakRatio), 3.3, accuracy: 1e-12,
+            "The longer return can have a lower mean but a much faster late pull")
+        XCTAssertNil(first.previousDirection)
+        XCTAssertNil(readout.at(0.7), "Endpoints belong to the following half-open interval, if any")
+        XCTAssertNil(readout.at(.nan))
+        let short = ScratchStrokeGeometry.RecordedMotionReadout(
+            records: [readoutMotion(id: "short", points: [(0, 0), (0.02, 1)])],
+            coordinateSpace: .normalizedTakeLocalDisplacement)
+        XCTAssertNil(try XCTUnwrap(short.at(0)).peak40msRate,
+            "A short movement cannot supply a complete 40 ms window")
+    }
+
+    func testRecordedMotionReadoutRejectsGapsOverlapsAndUncertainEvidence() throws {
+        let forward = readoutMotion(id: "forward", points: [(0, 0), (0.3, 1)])
+        let afterGap = readoutMotion(id: "after-gap", points: [(0.5, 1), (0.8, 0)])
+        let unknownEvidence = Record.Evidence(provenance: .unknown,
+            observation: .init(source: .unknown, confidence: 0,
+                reason: "lowMovementConfidence", rawSampleCount: 46))
+        let unknown = Record(id: "uncertain", direction: .backward, timingDomain: .seconds,
+            coordinateSpace: .normalizedTakeLocalDisplacement, evidence: unknownEvidence,
+            subdivisions: [.init(id: "uncertain-span", span: .init(startTime: 0.3, endTime: 0.5),
+                evidence: unknownEvidence)])
+        let readout = ScratchStrokeGeometry.RecordedMotionReadout(records: [forward, unknown, afterGap],
+            coordinateSpace: .normalizedTakeLocalDisplacement)
+        XCTAssertNil(readout.at(0.4))
+        XCTAssertEqual(readout.unavailableReason(at: 0.4),
+            "This movement falls below the review confidence threshold.")
+        XCTAssertNil(try XCTUnwrap(readout.at(0.6)).previousDirection)
+        XCTAssertNil(ScratchStrokeGeometry.RecordedMotionReadout(records: [forward, afterGap],
+            coordinateSpace: .normalizedTakeLocalDisplacement).at(0.4))
+        let overlap = readoutMotion(id: "overlap", points: [(0.2, 1), (0.4, 0)])
+        let conflicted = ScratchStrokeGeometry.RecordedMotionReadout(records: [forward, overlap, afterGap],
+            coordinateSpace: .normalizedTakeLocalDisplacement)
+        XCTAssertNil(conflicted.at(0.1), "Whole-movement statistics cannot include a conflicting fragment")
+        XCTAssertNil(conflicted.at(0.25))
+        XCTAssertNil(try XCTUnwrap(conflicted.at(0.6)).meanRatio)
+        let malformed = readoutMotion(id: "malformed", points: [(0.3, 1), (0.4, .nan), (0.5, 0)])
+        let invalid = ScratchStrokeGeometry.RecordedMotionReadout(records: [forward, malformed, afterGap],
+            coordinateSpace: .normalizedTakeLocalDisplacement)
+        XCTAssertNil(invalid.at(0.4))
+        XCTAssertNil(try XCTUnwrap(invalid.at(0.6)).meanRatio)
+    }
+
+    func testRecordedMotionReadoutDoesNotCompareAcrossHoldsSourcesOrResets() throws {
+        let forward = readoutMotion(id: "forward", points: [(0, 0), (0.3, 1)])
+        let backward = readoutMotion(id: "backward", points: [(0.3, 1), (0.6, 0)])
+        let sourceChange = readoutMotion(id: "watch", points: [(0.3, 1), (0.6, 0)], source: .watchMotion)
+        let discontinuity = readoutMotion(id: "discontinuity", points: [(0.3, 5), (0.6, 4)])
+        let smallJump = readoutMotion(id: "small-jump", points: [(0.3, 1 + 1e-9), (0.6, 0)])
+        for next in [sourceChange, discontinuity, smallJump] {
+            let readout = ScratchStrokeGeometry.RecordedMotionReadout(records: [forward, next],
+                coordinateSpace: .normalizedTakeLocalDisplacement)
+            XCTAssertNil(try XCTUnwrap(readout.at(0.4)).previousDirection)
+        }
+        let rounded = readoutMotion(id: "rounded", points: [(0.3, Double(1).nextUp), (0.6, 0)])
+        let roundingReadout = ScratchStrokeGeometry.RecordedMotionReadout(records: [forward, rounded],
+            coordinateSpace: .normalizedTakeLocalDisplacement)
+        XCTAssertEqual(try XCTUnwrap(roundingReadout.at(0.4)).previousDirection, .forward,
+            "Independent reconstruction of a shared endpoint can differ by one floating-point ULP")
+        let reset = ScratchStrokeGeometry.RecordedMotionReadout(records: [forward, backward],
+            coordinateSpace: .normalizedTakeLocalDisplacement, permitsComparison: false)
+        XCTAssertNil(try XCTUnwrap(reset.at(0.4)).meanRatio)
+        XCTAssertNil(try XCTUnwrap(reset.at(0.4)).peakRatio)
+        let sample = readoutMotion(id: "sample", points: [(0, 0), (0.3, 1)], coordinate: .samplePosition)
+        XCTAssertTrue(ScratchStrokeGeometry.RecordedMotionReadout(records: [sample],
+            coordinateSpace: .samplePosition).entries.isEmpty)
+        let evidence = forward.evidence
+        let held = Record(id: "held", direction: .forward, timingDomain: .seconds,
+            coordinateSpace: .normalizedTakeLocalDisplacement, evidence: evidence,
+            subdivisions: [forward.subdivisions[0], .init(id: "second-forward", span: .init(startTime: 0.4, endTime: 0.6),
+                evidence: evidence, measuredCurve: .init(points: [.init(time: 0.4, position: 1),
+                    .init(time: 0.6, position: 2)], evidence: evidence))],
+            internalHolds: [.init(id: "hold", span: .init(startTime: 0.3, endTime: 0.4),
+                label: .init(derived: .stationary), evidence: evidence, position: 1)])
+        let heldReadout = ScratchStrokeGeometry.RecordedMotionReadout(records: [held],
+            coordinateSpace: .normalizedTakeLocalDisplacement)
+        XCTAssertNil(heldReadout.at(0.35))
+        XCTAssertEqual(heldReadout.unavailableReason(at: 0.35), "The platter is held here.")
+        XCTAssertNil(try XCTUnwrap(heldReadout.at(0.5)).meanRatio)
+        let conflicting = readoutMotion(id: "conflicting-hold", points: [(0.32, 1), (0.38, 0)])
+        let conflictedHold = ScratchStrokeGeometry.RecordedMotionReadout(records: [held, conflicting],
+            coordinateSpace: .normalizedTakeLocalDisplacement)
+        XCTAssertNil(conflictedHold.at(0.35))
+        XCTAssertEqual(conflictedHold.unavailableReason(at: 0.35), "Recorded movement is unavailable here.",
+            "Conflicting motion cannot be labelled as an observed hold")
+    }
+
+    func testSupplied95BPMRecordedMotionReadoutRetainsMeasuredRatesAndGap() throws {
+        guard let path = ProcessInfo.processInfo.environment["SL_CENTRED_REVIEW_DRAFT_PATH"] else {
+            throw XCTSkip("Supply the registered corrected 95 BPM draft for measured readout regression.")
+        }
+        let original = try Data(contentsOf: URL(fileURLWithPath: path))
+        struct Envelope: Decodable { let payload: Data; let sha256: String }
+        let envelope = try JSONDecoder().decode(Envelope.self, from: original)
+        XCTAssertEqual(ReferencePackageIO.sha256Hex(envelope.payload), envelope.sha256)
+        let draft = try JSONDecoder().decode(ReferenceSavedDraft.self, from: envelope.payload)
+        XCTAssertEqual(draft.id, "derived-controller-3986b49c-6049-48c4-9541-6b9ab0260bbc")
+        let readout = ScratchStrokeGeometry.RecordedMotionReadout(records: draft.projection.records,
+            coordinateSpace: draft.projection.coordinateSpace)
+        let forward = try XCTUnwrap(readout.at(0.2))
+        let backward = try XCTUnwrap(readout.at(0.7))
+        XCTAssertEqual(forward.span.duration, 0.2903634166577831, accuracy: 1e-12)
+        XCTAssertEqual(backward.span.duration, 0.4626894583343528, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(backward.meanRatio), 0.931, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(backward.peakRatio), 1.3715, accuracy: 0.0001)
+        XCTAssertNil(readout.at(1.1))
+        XCTAssertEqual(readout.unavailableReason(at: 1.1),
+            "This movement falls below the review confidence threshold.")
+        XCTAssertNil(try XCTUnwrap(readout.at(1.3)).previousDirection)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), original)
+    }
+
     private func metadata(offset: Double = 4, bpm: Int = 60) -> ReferenceTakeMetadata {
         ReferenceTakeMetadata(referenceTakeID: "motion-review", authoringSessionID: "review", takeNumber: 1,
             performerName: "Fixture DJ",
@@ -5373,6 +5510,10 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
         XCTAssertTrue(review.contains("ReferenceMotionDetailPages.prepareInspection(input)"))
         XCTAssertTrue(review.contains("input.matches(takeID: takeID, source: request)"))
         XCTAssertTrue(review.contains("preparedInspectionRequest == inspection"))
+        XCTAssertTrue(review.contains("preparedRequest == request"),
+            "A prepared readout must not be reused after the selected source changes")
+        XCTAssertTrue(review.contains("guard !Task.isCancelled, input == request, requestedTakeID == takeID else { return }"),
+            "Detached geometry and readout publication must still match the current request")
         XCTAssertTrue(review.contains("let time = controller.currentPlaybackTime(for: takeID)"))
         XCTAssertTrue(review.contains("controller.stop()"))
         XCTAssertTrue(source.contains(".id(take.id)"), "Switching take must discard any pinned inspection state")
@@ -5396,6 +5537,19 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
         let travel = ReferenceMotionDetailPages.prepare(request)
         let enhanced = try XCTUnwrap(detail.pages.first)
         let recorded = try XCTUnwrap(travel.pages.first)
+        let measured = ScratchStrokeGeometry.RecordedMotionReadout(records: records,
+            coordinateSpace: full.coordinateSpace)
+        XCTAssertEqual(detail.movements, measured)
+        XCTAssertEqual(travel.movements, measured,
+            "Movement emphasis cannot change the prepared duration or speed readout")
+        let extended = try XCTUnwrap(ScratchStrokeGeometry.CanonicalFrame(timeRange: 0...16,
+            positionRange: full.positionRange, coordinateSpace: full.coordinateSpace, beatsPerMinute: 95))
+        let laterWindow = ReferenceMotionDetailPages.prepare(.init(records: records, fullFrame: extended,
+            mixerFaders: nil, samplePlayback: nil, showBeatGrid: true, beatOffset: 2.4,
+            selectedRange: 8...16))
+        XCTAssertEqual(laterWindow.pages.first?.chart.frame.timeRange, 8...16)
+        XCTAssertEqual(laterWindow.movements, measured,
+            "Frame selection never remeasures a clipped fragment as a complete movement")
         XCTAssertTrue(enhanced.isMovementDetail)
         XCTAssertFalse(recorded.isMovementDetail)
         XCTAssertEqual(detail.overview, travel.overview)

@@ -1,3 +1,9 @@
+## 2026-10-16 — User-requested reboot checkpoint
+
+Review readability candidate2 focused gate PASS102executions,0failures/skips and21acceptedPNGimages. Full scripts/build.sh all intentionally stopped at user's explicit “Stop safely for reboot now” after7843nativepasses/0observedfailures; both supervisors reaped children with no survivors. Full gate/platform builds/stage/install/live UI remain incomplete. Exact frozen source and stopped evidence archived under review-readability/failures/user-reboot-stop; current app unchanged. TASKS remains unchecked. Authorized checkpoint preserves current implementation and docs without claiming full acceptance. Follow-up: existing canonicalGeometry quadratic partition cost documented separately; production Release timing not yet measured.
+
+User separately authorized disk cleanup. Audited caches +approvedTrash +exactapprovedlocalsnapshot removal recovered about53.18GB; source/media/apps/results/drafts and K BACKUP preserved. External disk-cleanup/RESULT.md carries exact receipts.
+
 # DEV_LOG
 
 ## 2026-08-31 (Review latest-take and upfader notation physical defect)
@@ -7520,3 +7526,9 @@ Installed UI PASS on connected development Mac: compact camera; whole 8.52-secon
 Preservation PASS: all 55 pre-install registered draft/derived files, original ZIP and unrelated untracked CoachDemoMotion/cxl_baby_target.json unchanged. Human-edited draft 28bff937f90e38e2a7bb76c6ee883aae5a580bac1319959f2c79250cd00db4bb.json is user content: never remove/reset it with old disposable helpers. New labelled test clone ui-motion-fidelity-check-6d45c293-a112-494e-8b77-b1cb16b92d4e is retained separately at 26afe058ba310302b7616baf8c0ed463206e35f52b19b87dad7647564728500b.json; only its repetition-2 bounds and savedAt changed. No take approved. Temporary owned display assertion PID47036 was identity-checked and released after UI checks. Audited old compiler-only cache cleanup reclaimed 5.59 GiB; prior source/evidence/packages/apps/media preserved.
 
 Evidence: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-13/motion-fidelity-audit/RESULT.md, final/ software/package archive, INSTALL-RECEIPT.json, live-ui/LIVE-UI-RECEIPT.json, ui-motion-fidelity-check/final-original-preserved-receipt.json. Authorized checkpoint/push identity is recorded in GIT-RECEIPT.json after the operation; do not infer it from this pre-commit text. Existing commit/push/install/AppleScript authorization persists. No additional implementation is queued for this bounded correction. Await actual user feedback; do not overwrite measured motion with idealized geometry or turn software receipts into physical acceptance.
+
+## 16 October 2026 — Review readability correction in progress
+
+User-selected next correction follows the read-only audit: combined fitter and renderer padding leaves only46.2% of the400pt chart for the full motion excursion; the dashed midpoint is not a recorded cue. A143.55ms gap is a45-step movement with provisional confidence .745 below .75, not packet loss. Preserve threshold and unknown evidence. Selected work: review-only height reclamation, remove false guide, measured direction/duration and relative mean/40ms-peak readout. No new gates or install have run. Baseline ba4626f; protected untracked demo JSON and all saved takes preserved.
+
+First candidate /private/tmp/sl-review-readability-20261016 stopped at warm test build (exit65): the new loop fixture observation map exceeded Swift type checking. No tests/full/platform gate/install ran. Failed snapshot/logs retained. Test-only repair uses explicit Observation/Kind/Double/UInt64 values; assertions unchanged. New candidate /private/tmp/sl-review-readability-types-20261016 will verify the corrected source.

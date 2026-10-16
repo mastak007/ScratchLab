@@ -118,6 +118,182 @@ struct MotionPath: Equatable, Sendable {
 
 /// Turns lane content into its platter-position curve.
 enum ScratchStrokeGeometry {
+    /// Prepared once beside review geometry, never from a playback tick. Rates
+    /// retain the recorded coordinate unit; only same-take ratios are unitless.
+    /// This presentation value adds no persisted or exported measurements.
+    struct RecordedMotionReadout: Equatable, Sendable {
+        private typealias Record = ScratchNotation.GestureRecord
+
+        struct Entry: Equatable, Sendable {
+            let span: ScratchNotation.GestureRecord.TimeSpan
+            let direction: ScratchNotationDirection
+            let meanRate: Double
+            let peak40msRate: Double?
+            var previousDirection: ScratchNotationDirection?
+            var meanRatio: Double?
+            var peakRatio: Double?
+        }
+
+        private struct Unavailable: Equatable, Sendable {
+            let span: Record.TimeSpan
+            let reason: String
+        }
+        let entries: [Entry]
+        private let unavailable: [Unavailable]
+
+        init(records: [ScratchNotation.GestureRecord],
+             coordinateSpace: ScratchNotation.GestureRecord.CoordinateSpace,
+             permitsComparison: Bool = true) {
+            struct Candidate {
+                var entry: Entry
+                let owner: Int
+                let source: ScratchNotationEvidenceSource
+                let startPosition: Double
+                let endPosition: Double
+            }
+            func validSpan(_ span: Record.TimeSpan) -> Bool {
+                span.startTime.isFinite && span.endTime.isFinite && span.startTime >= 0
+                    && span.endTime > span.startTime && span.duration.isFinite
+            }
+            func overlaps(_ a: Record.TimeSpan, _ b: Record.TimeSpan) -> Bool {
+                a.startTime < b.endTime && b.startTime < a.endTime
+            }
+            var candidates: [Candidate] = []
+            var occupied: [(owner: Int, span: Record.TimeSpan)] = []
+            var unavailable: [Unavailable] = []
+            var holds: [(owner: Int, span: Record.TimeSpan, measured: Bool)] = []
+            // An unlocatable interval cannot safely be excluded from a rate
+            // comparison. Sample-position resets are not physical movement.
+            guard !Task.isCancelled, coordinateSpace != .samplePosition,
+                  records.allSatisfy({ $0.timingDomain == .seconds
+                    && !$0.subdivisions.isEmpty
+                    && ($0.subdivisions.map(\.span) + $0.internalHolds.map(\.span)).allSatisfy(validSpan)
+                  }) else {
+                self.entries = []; self.unavailable = []; return
+            }
+            for (owner, record) in records.enumerated() {
+                guard !Task.isCancelled else {
+                    self.entries = []; self.unavailable = []; return
+                }
+                let spans = record.subdivisions.map(\.span) + record.internalHolds.map(\.span)
+                let extent = Record.TimeSpan(startTime: spans.map(\.startTime).min()!,
+                    endTime: spans.map(\.endTime).max()!)
+                occupied.append((owner, extent))
+                let validRecord = record.coordinateSpace == coordinateSpace
+                    && record.evidence.provenance == .measured
+                    && record.motionValidationIssues().isEmpty
+                for subdivision in record.subdivisions {
+                    let reason = record.evidence.observation.reason == "lowMovementConfidence"
+                        ? "This movement falls below the review confidence threshold."
+                        : "Recorded movement is unavailable here."
+                    guard validRecord, subdivision.evidence.provenance == .measured,
+                          let curve = subdivision.measuredCurve, curve.evidence.provenance == .measured,
+                          curve.evidence.observation.source == record.evidence.observation.source,
+                          subdivision.evidence.observation.source == curve.evidence.observation.source,
+                          let first = curve.points.first, let last = curve.points.last else {
+                        unavailable.append(.init(span: subdivision.span, reason: reason)); continue
+                    }
+                    let delta = last.position - first.position
+                    let forward = record.direction == .forward
+                    let monotone = zip(curve.points, curve.points.dropFirst()).allSatisfy { a, b in
+                        let change = b.position - a.position
+                        return change.isFinite && (forward ? change >= 0 : change <= 0)
+                    }
+                    let mean = abs(delta) / subdivision.span.duration
+                    guard delta.isFinite, forward ? delta > 0 : delta < 0,
+                          monotone, mean.isFinite, mean > 0 else {
+                        unavailable.append(.init(span: subdivision.span, reason: reason)); continue
+                    }
+                    candidates.append(.init(entry: .init(span: subdivision.span,
+                        direction: record.direction, meanRate: mean, peak40msRate: Self.peakRate(curve.points),
+                        previousDirection: nil, meanRatio: nil, peakRatio: nil), owner: owner,
+                        source: curve.evidence.observation.source,
+                        startPosition: first.position, endPosition: last.position))
+                }
+                holds += record.internalHolds.map {
+                    let measured = validRecord && $0.evidence.provenance == .measured
+                        && Record.evidenceIssues($0.evidence, platter: true).isEmpty
+                        && $0.position?.isFinite == true
+                    return (owner, $0.span, measured)
+                }
+            }
+            unavailable += holds.map { hold in
+                let unambiguous = hold.measured && !occupied.contains {
+                    $0.owner != hold.owner && overlaps($0.span, hold.span)
+                }
+                return .init(span: hold.span, reason: unambiguous
+                    ? "The platter is held here." : "Recorded movement is unavailable here.")
+            }
+            // Reject a whole movement whose rate would include any conflicting
+            // record. Do not compare clean-looking fragments across that region.
+            let usable = candidates.filter { candidate in
+                !occupied.contains { $0.owner != candidate.owner && overlaps($0.span, candidate.entry.span) }
+            }.sorted { $0.entry.span.startTime < $1.entry.span.startTime }
+            var entries: [Entry] = []
+            for (index, candidate) in usable.enumerated() {
+                var entry = candidate.entry
+                if permitsComparison, index > 0 {
+                    let previous = usable[index - 1]
+                    // Shared endpoints can differ by a few rounding ULPs
+                    // after independent reconstruction, never by a real reset.
+                    if previous.entry.span.endTime == entry.span.startTime,
+                       abs(previous.endPosition - candidate.startPosition)
+                        <= max(1, max(abs(previous.endPosition), abs(candidate.startPosition))) * Double.ulpOfOne * 8,
+                       previous.source == candidate.source,
+                       previous.entry.direction != entry.direction {
+                        let ratio = entry.meanRate / previous.entry.meanRate
+                        if ratio.isFinite {
+                            entry.previousDirection = previous.entry.direction
+                            entry.meanRatio = ratio
+                        }
+                        if let currentPeak = entry.peak40msRate, let previousPeak = previous.entry.peak40msRate,
+                           previousPeak > 0 {
+                            let ratio = currentPeak / previousPeak
+                            if ratio.isFinite { entry.peakRatio = ratio }
+                        }
+                    }
+                }
+                entries.append(entry)
+            }
+            self.entries = entries
+            self.unavailable = unavailable
+        }
+
+        /// Half-open lookup: the exact reversal belongs to the next movement;
+        /// a gap, conflicting interval or nonfinite clock has no rate.
+        func at(_ time: Double) -> Entry? {
+            guard time.isFinite else { return nil }
+            let matches = entries.filter { $0.span.contains(time) }
+            return matches.count == 1 ? matches[0] : nil
+        }
+
+        func unavailableReason(at time: Double) -> String? {
+            guard time.isFinite, at(time) == nil else { return nil }
+            let matches = unavailable.filter { $0.span.contains(time) }
+            return matches.count == 1 ? matches[0].reason : nil
+        }
+
+        /// Maximum 40 ms average beginning at an original vertex. Linear
+        /// interpolation only reaches inside this validated measured curve;
+        /// the window never crosses a reversal, hold or missing interval.
+        private static func peakRate(_ points: [Record.CurvePoint]) -> Double? {
+            guard let last = points.last else { return nil }
+            let window = 0.04
+            var right = 1
+            var peak: Double?
+            for point in points {
+                let end = point.time + window
+                guard end <= last.time else { break }
+                while right < points.count - 1 && points[right].time < end { right += 1 }
+                let a = points[right - 1], b = points[right]
+                let position = a.position + (b.position - a.position) * ((end - a.time) / (b.time - a.time))
+                let rate = abs(position - point.position) / window
+                guard rate.isFinite else { return nil }
+                peak = max(peak ?? 0, rate)
+            }
+            return peak
+        }
+    }
 
     /// Per-stroke amplitude — how far the platter moves in one stroke.
     /// A slow drag reads as a small excursion; a medium push is mid-amplitude;

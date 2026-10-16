@@ -150,8 +150,9 @@ enum ScratchMotionRenderer {
     static func draw(_ path: MotionPath,
                      in context: GraphicsContext,
                      viewport: LaneViewport,
-                     style: Style) {
-        let drawn = projectedSegments(path, viewport: viewport)
+                     style: Style,
+                     crossInsetFraction: CGFloat = ScratchMotionRenderer.crossInsetFraction) {
+        let drawn = projectedSegments(path, viewport: viewport, crossInsetFraction: crossInsetFraction)
         guard !drawn.isEmpty else { return }
 
         var layer = context
@@ -498,15 +499,18 @@ enum ScratchMotionRenderer {
     /// The actual Canvas input, also used by deterministic pixel-coordinate
     /// snapshots. Canonical positions are clipped by the canvas, never clamped
     /// to a rail (which would fabricate a hold at an overshoot).
-    static func projectedSegments(_ path: MotionPath, viewport: LaneViewport) -> [ProjectedSegment] {
+    static func projectedSegments(_ path: MotionPath, viewport: LaneViewport,
+                                  crossInsetFraction: CGFloat = ScratchMotionRenderer.crossInsetFraction) -> [ProjectedSegment] {
         path.segments.filter {
             viewport.isVisible(from: $0.startTime, to: $0.endTime)
         }.map { segment in
             ProjectedSegment(segment: segment,
                 a: screenPoint(time: segment.startTime, position: segment.startPosition,
-                               viewport: viewport, clampPosition: segment.evidenceStyle == .legacy),
+                               viewport: viewport, clampPosition: segment.evidenceStyle == .legacy,
+                               crossInsetFraction: crossInsetFraction),
                 b: screenPoint(time: segment.endTime, position: segment.endPosition,
-                               viewport: viewport, clampPosition: segment.evidenceStyle == .legacy))
+                               viewport: viewport, clampPosition: segment.evidenceStyle == .legacy,
+                               crossInsetFraction: crossInsetFraction))
         }
     }
 
@@ -567,14 +571,17 @@ enum ScratchMotionRenderer {
     /// `position` 0 is the lane's low edge, 1 the high edge; "rising" reads as
     /// up in landscape and as a forward deflection in portrait.
     private static func screenPoint(time: TimeInterval, position: CGFloat,
-                                    viewport: LaneViewport, clampPosition: Bool = true) -> CGPoint {
-        let cross = crossCoordinate(for: position, viewport: viewport, clampPosition: clampPosition)
+                                    viewport: LaneViewport, clampPosition: Bool = true,
+                                    crossInsetFraction: CGFloat = ScratchMotionRenderer.crossInsetFraction) -> CGPoint {
+        let cross = crossCoordinate(for: position, viewport: viewport, clampPosition: clampPosition,
+                                    crossInsetFraction: crossInsetFraction)
         return viewport.point(scroll: viewport.pos(for: time), cross: cross)
     }
 
     /// Cross-axis screen coordinate for a normalized platter position.
     private static func crossCoordinate(for position: CGFloat,
-                                        viewport: LaneViewport, clampPosition: Bool = true) -> CGFloat {
+                                        viewport: LaneViewport, clampPosition: Bool = true,
+                                        crossInsetFraction: CGFloat = ScratchMotionRenderer.crossInsetFraction) -> CGFloat {
         let inset = crossInsetFraction * viewport.crossLength
         let band = max(viewport.crossLength - inset * 2, 1)
         let clamped = clampPosition ? min(max(position, 0), 1) : position

@@ -1,3 +1,7 @@
+## Current explicit user task — review readability, 16 October 2026
+
+- [ ] Correct the review-only duplicate vertical inset and arbitrary midpoint guide; retain full repetition/eight-second context and common-scale measured motion. Add a bounded playhead direction/duration/speed readout with honest uncertainty; verify actual saved95 evidence, software/all-platform gates, signed app and installed review. Raw/canonical evidence and physical acceptance remain separate.
+
 ## Current explicit user task — recorded motion fidelity, 13 October 2026
 
 - [x] Correct default review’s per-direction gain distortion with a common linear trace and optional pinned close-up, retaining the full repetition/eight-second context. Actual95BPM slope regression, focused/full software gates, all-platform builds, signed installation and installed playback/inspection/body/edge/narrow/no-jump/reopen checks PASS. All55 original review files preserved; separate test clone retained. See motion-fidelity-audit/RESULT.md. Physical/audio alignment, Intel responsiveness and user visual acceptance remain separate unconfirmed observations.

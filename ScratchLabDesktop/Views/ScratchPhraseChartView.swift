@@ -122,6 +122,26 @@ struct ScratchPhraseChartView: View {
     // The strokes region gets the remaining (1 - faderLaneFraction).
     private let faderLaneFraction: CGFloat = 0.30
 
+    /// Physical review frames already contain common-axis padding. Applying
+    /// the renderer's legacy inset again wastes depth. Sample-relative frames
+    /// keep their inset to clear loop/cue labels; other charts stay unchanged.
+    var canonicalPlatterFraction: CGFloat {
+        reviewDetail ? 0.84 : (showsMixerFaderLanes ? 0.55 : (1 - faderLaneFraction))
+    }
+    var canonicalMotionInsetFraction: CGFloat {
+        reviewDetail && !samplePosition ? 0 : ScratchMotionRenderer.crossInsetFraction
+    }
+    func canonicalPlatterHeight(for height: CGFloat) -> CGFloat {
+        let preferred = height * canonicalPlatterFraction
+        // The compact close-up also needs room for two named, readable rails.
+        return reviewDetail && showsMixerFaderLanes ? min(preferred, max(0, height - 56)) : preferred
+    }
+    func canonicalMixerRailOffsets(for height: CGFloat) -> (open: CGFloat, closed: CGFloat) {
+        guard reviewDetail else { return (height * 0.34, height * 0.87) }
+        let open = min(max(14, height * 0.34), max(0, height - 4))
+        return (open, max(open, min(height * 0.87, max(0, height - 1))))
+    }
+
     var body: some View {
         switch source {
         case .target:
@@ -171,7 +191,7 @@ struct ScratchPhraseChartView: View {
         let start = frame.timeRange.lowerBound
         let duration = frame.timeRange.upperBound - start
         let pps = size.width / CGFloat(duration)
-        let platterHeight = size.height * (reviewDetail ? 0.76 : (showsMixerFaderLanes ? 0.55 : (1 - faderLaneFraction)))
+        let platterHeight = canonicalPlatterHeight(for: size.height)
         let style: ScratchMotionRenderer.Style = layer == .target ? .target : .performance
         drawBeatGrid(ctx: ctx, size: size, startTime: start, duration: duration, pps: pps,
                      labelBottomY: platterHeight - 2, beatsPerMinute: beatsPerMinute ?? frame.beatsPerMinute)
@@ -180,14 +200,8 @@ struct ScratchPhraseChartView: View {
                                     secondsAhead: duration)
         var platterContext = ctx
         platterContext.clip(to: Path(CGRect(origin: .zero, size: viewport.size)))
-        if reviewDetail {
-            var centre = Path()
-            centre.move(to: CGPoint(x: 0, y: platterHeight / 2))
-            centre.addLine(to: CGPoint(x: size.width, y: platterHeight / 2))
-            platterContext.stroke(centre, with: .color(.white.opacity(0.28)),
-                style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
-        }
-        ScratchMotionRenderer.draw(geometry.motion, in: platterContext, viewport: viewport, style: style)
+        ScratchMotionRenderer.draw(geometry.motion, in: platterContext, viewport: viewport, style: style,
+            crossInsetFraction: canonicalMotionInsetFraction)
         for marker in sampleResetMarkers where frame.timeRange.contains(marker.time) {
             let x = CGFloat(marker.time - start) * pps
             var line = Path()
@@ -285,8 +299,9 @@ struct ScratchPhraseChartView: View {
                                ctx: GraphicsContext, size: CGSize, start: Double, pps: CGFloat,
                                top: CGFloat, height: CGFloat, color: Color) {
         drawLaneDivider(ctx: ctx, size: size, y: top)
-        let openY = top + height * 0.34
-        let closedY = top + height * 0.87
+        let rails = canonicalMixerRailOffsets(for: height)
+        let openY = top + rails.open
+        let closedY = top + rails.closed
         ctx.draw(Text(title).font(.system(size: 8.5, weight: .bold, design: .monospaced))
             .foregroundStyle(Color.secondary), at: CGPoint(x: 4, y: top + 2), anchor: .topLeading)
         for y in [openY, closedY] {

@@ -1577,6 +1577,148 @@ final class CanonicalTearRendererTests: XCTestCase {
                 evidence: motionEvidence, measuredCurve: curve, targetCurve: curve)])
     }
 
+    @MainActor
+    func testReviewLayoutUsesFullerHeightWithoutChangingMeasuredSlopeRatios() throws {
+        let records = [
+            singleMotion(id: "slow-forward", points: [
+                .init(time: 0, position: 0), .init(time: 0.75, position: 0.2),
+                .init(time: 1, position: 0.5)
+            ]),
+            singleMotion(id: "fast-return", points: [
+                .init(time: 1, position: 0.5), .init(time: 1.25, position: 0.1)
+            ], direction: .backward)
+        ]
+        let fitted = try frame(time: 0...1.25, position: 0...1)
+            .fittingVisibleMotion(in: records, layer: .performance)
+        let geometry = ScratchStrokeGeometry.canonicalGeometry(records: records, layer: .performance, frame: fitted)
+        let chart = ScratchPhraseChartView(source: .preparedCanonical(.init(records: records,
+            layer: .performance, frame: fitted)), showsMixerFaderLanes: true, reviewDetail: true)
+        let viewport = LaneViewport(size: CGSize(width: 800, height: chart.canonicalPlatterHeight(for: 400)),
+            now: 0, axis: .horizontal, actionLineFraction: 0, secondsAhead: 1.25)
+        let drawn = ScratchMotionRenderer.projectedSegments(geometry.motion, viewport: viewport,
+            crossInsetFraction: chart.canonicalMotionInsetFraction)
+        XCTAssertEqual(drawn.map(\.segment), geometry.motion.segments)
+        let ys = drawn.flatMap { [$0.a.y, $0.b.y] }
+        let span = try XCTUnwrap(ys.max()) - XCTUnwrap(ys.min())
+        XCTAssertGreaterThan(span, 400 * 0.65, "The measured excursion should use most of the chart's height")
+        XCTAssertGreaterThan(try XCTUnwrap(ys.min()), 20, "The existing axis padding still clears the lane label")
+        XCTAssertEqual(drawn.map { [$0.a.x, $0.b.x] }, [[0, 480], [480, 640], [640, 800]])
+        let slopes = drawn.map { ($0.b.y - $0.a.y) / ($0.b.x - $0.a.x) }
+        XCTAssertEqual(abs(slopes[1] / slopes[0]), 4.5, accuracy: 1e-12)
+        XCTAssertEqual(abs(slopes[2] / slopes[0]), 6, accuracy: 1e-12,
+            "Every movement must receive the same vertical gain")
+        XCTAssertEqual(abs((drawn[2].b.y - drawn[2].a.y) / (drawn[0].b.y - drawn[0].a.y)), 2, accuracy: 1e-12)
+        XCTAssertTrue(geometry.missingMotion.isEmpty)
+    }
+
+    @MainActor
+    func testNonReviewCanonicalLayoutRetainsOriginalPixelCoordinates() throws {
+        let record = singleMotion(id: "unchanged", points: [.init(time: 0, position: 0), .init(time: 1, position: 1)])
+        let shared = try frame(time: 0...1, position: 0...1)
+        let geometry = try geometry(record, in: shared)
+        for (hasMixer, expectedStart, expectedEnd) in [(true, 193.6, 26.4), (false, 246.4, 33.6)] {
+            let chart = ScratchPhraseChartView(source: .canonical([record], layer: .performance, frame: shared),
+                showsMixerFaderLanes: hasMixer)
+            let viewport = LaneViewport(size: CGSize(width: 800, height: chart.canonicalPlatterHeight(for: 400)),
+                now: 0, axis: .horizontal, actionLineFraction: 0, secondsAhead: 1)
+            let original = ScratchMotionRenderer.projectedSegments(geometry.motion, viewport: viewport)
+            let explicit = ScratchMotionRenderer.projectedSegments(geometry.motion, viewport: viewport,
+                crossInsetFraction: chart.canonicalMotionInsetFraction)
+            XCTAssertEqual(original, explicit)
+            let segment = try XCTUnwrap(explicit.first)
+            XCTAssertEqual(segment.a.x, 0)
+            XCTAssertEqual(segment.b.x, 800)
+            XCTAssertEqual(segment.a.y, CGFloat(expectedStart), accuracy: 1e-12)
+            XCTAssertEqual(segment.b.y, CGFloat(expectedEnd), accuracy: 1e-12)
+            let rails = chart.canonicalMixerRailOffsets(for: 90)
+            XCTAssertEqual(rails.open, 30.6, accuracy: 1e-12)
+            XCTAssertEqual(rails.closed, 78.3, accuracy: 1e-12)
+        }
+    }
+
+    @MainActor
+    func testReviewSampleResetExtremaAndCompactMixerLanesStayInsideTheirLanes() throws {
+        let records = [singleMotion(id: "physical", points: [
+            .init(time: 0, position: 0), .init(time: 2, position: 20)
+        ])]
+        var observations: [RecordedPlaybackLoopTimeline.Observation] = []
+        for index in 0...40 {
+            let kind: RecordedPlaybackLoopTimeline.Kind
+            if index == 0 { kind = .sampleRestart }
+            else if index == 20 { kind = .loop }
+            else { kind = .position }
+            let time = Double(index) / 20.0
+            let position = Double(index < 20 ? index : 40 - index)
+            observations.append(.init(time: time, kind: kind,
+                sampleID: "synthetic-loop", generation: UInt64(1),
+                positionSteps: position, loopLengthInSteps: 20.0))
+        }
+        let timeline = RecordedPlaybackLoopTimeline(version: 1, sessionID: "fixture", takeID: "fixture",
+            duration: 2, overflowed: false, observations: observations)
+        let sample = try XCTUnwrap(ScratchStrokeGeometry.samplePlaybackChart(timeline: timeline,
+            records: records, frame: try frame(time: 0...2, position: 0...20)))
+        let chart = ScratchPhraseChartView(source: .preparedCanonical(sample.prepared),
+            showsMixerFaderLanes: true, reviewDetail: true,
+            sampleResetMarkers: sample.resets, samplePosition: true)
+        XCTAssertEqual(sample.resets.map(\.time), [0, 1])
+        XCTAssertEqual(sample.resets.map(\.kind), [.sampleRestart, .loop])
+        for height in [CGFloat(240), 400, 800] {
+            let platterHeight = chart.canonicalPlatterHeight(for: height)
+            let viewport = LaneViewport(size: CGSize(width: 800, height: platterHeight), now: 0,
+                axis: .horizontal, actionLineFraction: 0, secondsAhead: 2)
+            let drawn = ScratchMotionRenderer.projectedSegments(sample.prepared.geometry.motion,
+                viewport: viewport, crossInsetFraction: chart.canonicalMotionInsetFraction)
+            XCTAssertEqual(drawn.map(\.segment), sample.prepared.geometry.motion.segments)
+            let ys = drawn.flatMap { [$0.a.y, $0.b.y] }
+            XCTAssertGreaterThan(try XCTUnwrap(ys.min()), 20, "Loop extrema must clear the top label")
+            XCTAssertLessThan(try XCTUnwrap(ys.max()), platterHeight - 20)
+            XCTAssertFalse(drawn.contains { $0.segment.startTime < 1 && $0.segment.endTime > 1 },
+                "A recorded loop remains a pen-up")
+            let mixerHeight = (height - platterHeight) / 2
+            XCTAssertGreaterThanOrEqual(mixerHeight, 28)
+            let rails = chart.canonicalMixerRailOffsets(for: mixerHeight)
+            XCTAssertGreaterThanOrEqual(rails.open, 14, "The rail must be below its label")
+            XCTAssertGreaterThan(rails.closed - rails.open, 8)
+            XCTAssertLessThan(rails.closed, mixerHeight)
+        }
+    }
+
+    @MainActor
+    func testReviewChartDoesNotInventAMidpointReferenceLine() throws {
+        let record = singleMotion(id: "below-midpoint", points: [
+            .init(time: 0, position: 0.2), .init(time: 1, position: 0.3)
+        ])
+        let chart = ScratchPhraseChartView(source: .canonical([record], layer: .performance,
+            frame: try frame(time: 0...1, position: 0...1)), showBeatGrid: false,
+            showsMixerFaderLanes: true, reviewDetail: true, backgroundColor: .black)
+        let renderer = ImageRenderer(content: chart.frame(width: 800, height: 400))
+        renderer.scale = 1; renderer.isOpaque = true
+        let image = try XCTUnwrap(renderer.cgImage)
+        let pixels = NSBitmapImageRep(cgImage: image)
+        let middle = Int(chart.canonicalPlatterHeight(for: 400) / 2)
+        for y in (middle - 1)...(middle + 1) {
+            for x in 200..<700 {
+                let color = try XCTUnwrap(pixels.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                XCTAssertEqual(max(color.redComponent, max(color.greenComponent, color.blueComponent)), 0, accuracy: 1.0 / 255,
+                    "An axis midpoint is not evidence of a cue, home position or reversal")
+            }
+        }
+        let tracePeak = try (245...260).flatMap { y in
+            try (380...420).map { x in
+                try XCTUnwrap(pixels.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)).blueComponent
+            }
+        }.max()
+        XCTAssertGreaterThan(try XCTUnwrap(tracePeak), 0.3, "The chart must still render the measured trace")
+        let attachment = XCTAttachment(image: NSImage(cgImage: image, size: NSSize(width: 800, height: 400)))
+        attachment.name = "Review chart without invented midpoint"; attachment.lifetime = .keepAlways; add(attachment)
+        if let directory = ProcessInfo.processInfo.environment["SL_REVIEW_PLAYHEAD_RENDER_DIRECTORY"] {
+            let url = URL(fileURLWithPath: directory, isDirectory: true)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            let png = try XCTUnwrap(pixels.representation(using: .png, properties: [:]))
+            try png.write(to: url.appendingPathComponent("review-without-midpoint.png"), options: .atomic)
+        }
+    }
+
     func testReviewFitCentersLateHighBandWithoutChangingRawMotion() throws {
         let records = [
             singleMotion(id: "early", points: [.init(time: 0, position: 0), .init(time: 2, position: 1)]),

@@ -2845,6 +2845,62 @@ private struct ReferenceReviewPlaybackOverlay: View {
     }
 }
 
+/// The readout uses precomputed recorded-motion metrics, independently of the
+/// fitted/emphasized chart. Playback ticks only select an existing interval.
+private struct ReferenceReviewMovementReadout: View {
+    @ObservedObject var controller: ReferenceFinalizedMediaReviewController
+    let takeID: String
+    let movements: ScratchStrokeGeometry.RecordedMotionReadout
+    let usesSamplePosition: Bool
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 0.1, paused: !controller.isPlaying)) { _ in
+            let time = controller.currentPlaybackTime(for: takeID)
+            VStack(alignment: .leading, spacing: 3) {
+                if let time, let movement = movements.at(time) {
+                    Text("Recorded platter: \(direction(movement.direction).lowercased()) · duration \(movement.span.duration, specifier: "%.2f") s")
+                        .font(.caption.weight(.semibold))
+                    if let previous = movement.previousDirection, let mean = movement.meanRatio {
+                        Text(comparison(previous: previous, mean: mean, peak: movement.peakRatio))
+                            .font(.caption2).foregroundStyle(.secondary)
+                    } else {
+                        Text(usesSamplePosition
+                            ? "Physical speed comparison is unavailable in sample-position view."
+                            : "Speed comparison needs an adjacent measured movement.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("At playhead").font(.caption.weight(.semibold))
+                    Text(time.flatMap { movements.unavailableReason(at: $0) }
+                        ?? "No reliable measured movement at the playhead.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            .monospacedDigit()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 44, alignment: .topLeading)
+            .clipped()
+        }
+        .help("Recorded durations may begin or end partway through a physical gesture. Speed ratios compare adjacent recorded movements on the same scale; 1× means equal speed. Peak uses a 40 ms window. These are not calibrated physical speeds.")
+    }
+
+    private func direction(_ value: ScratchNotationDirection) -> String {
+        switch value {
+        case .forward: return "Forward"
+        case .backward: return "Backward"
+        }
+    }
+
+    private func comparison(previous: ScratchNotationDirection, mean: Double, peak: Double?) -> String {
+        let average = String(format: "%.2f", mean)
+        let reference = direction(previous).lowercased()
+        if let peak {
+            return "Compared with preceding \(reference): average speed \(average)× · peak speed \(String(format: "%.2f", peak))× (40 ms)"
+        }
+        return "Compared with preceding \(reference): average speed \(average)× · too short for a 40 ms peak comparison"
+    }
+}
+
 /// Static review geometry is prepared off the UI thread. The complete
 /// repetition stays visible while only the independent playback cursor moves.
 struct ReferenceMotionDetailPages: Equatable, Sendable {
@@ -2904,6 +2960,7 @@ struct ReferenceMotionDetailPages: Equatable, Sendable {
     let pages: [Page]
     let overview: ScratchStrokeGeometry.PreparedCanonicalChart
     let usesSamplePosition: Bool
+    let movements: ScratchStrokeGeometry.RecordedMotionReadout
 
     static func prepare(_ request: Request) -> Self {
         let full = request.fullFrame
@@ -2913,9 +2970,11 @@ struct ReferenceMotionDetailPages: Equatable, Sendable {
             ScratchStrokeGeometry.samplePlaybackChart(timeline: $0, records: request.records,
                 frame: full, mixerFaders: request.mixerFaders)
         }
+        let movements = ScratchStrokeGeometry.RecordedMotionReadout(records: request.records,
+            coordinateSpace: full.coordinateSpace, permitsComparison: sample == nil)
         let selected = request.selectedRange ?? full.timeRange.lowerBound...min(full.timeRange.upperBound, full.timeRange.lowerBound + 8)
         guard let window = ScratchStrokeGeometry.reviewTimeRange(selected: selected, within: full.timeRange),
-              !Task.isCancelled else { return .init(pages: [], overview: overview, usesSamplePosition: sample != nil) }
+              !Task.isCancelled else { return .init(pages: [], overview: overview, usesSamplePosition: sample != nil, movements: movements) }
         let page: Page
         if let detail = sample?.windowed(to: window) {
             page = .init(chart: detail.prepared, resets: detail.resets)
@@ -2932,7 +2991,7 @@ struct ReferenceMotionDetailPages: Equatable, Sendable {
         } else {
             displayed = page
         }
-        return Self(pages: [displayed], overview: overview, usesSamplePosition: sample != nil)
+        return Self(pages: [displayed], overview: overview, usesSamplePosition: sample != nil, movements: movements)
     }
 
     func pageIndex(at time: Double) -> Int { 0 }
@@ -2949,6 +3008,7 @@ private struct ReferenceMotionDetailView: View {
     let commitBoundary: (ReferenceRepetitionBoundary) -> Void
     @State private var prepared: ReferenceMotionDetailPages?
     @State private var preparedTakeID: String?
+    @State private var preparedRequest: ReferenceMotionDetailPages.Request?
     @State private var inspectionRequest: ReferenceMotionDetailPages.InspectionRequest?
     @State private var preparedInspectionRequest: ReferenceMotionDetailPages.InspectionRequest?
     @State private var preparedInspection: ReferenceMotionDetailPages.Page?
@@ -2960,7 +3020,7 @@ private struct ReferenceMotionDetailView: View {
 
     var body: some View {
         Group {
-            if let prepared, preparedTakeID == takeID, let page = prepared.pages.first {
+            if let prepared, preparedTakeID == takeID, preparedRequest == request, let page = prepared.pages.first {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Text("Visible \(page.chart.frame.timeRange.lowerBound, specifier: "%.2f")–\(page.chart.frame.timeRange.upperBound, specifier: "%.2f") s")
@@ -2979,6 +3039,7 @@ private struct ReferenceMotionDetailView: View {
                         }
                     }
                     .font(.caption)
+                    .frame(height: 24)
                     ScratchPhraseChartView(source: .preparedCanonical(page.chart),
                         bpm: request.fullFrame.beatsPerMinute, showBeatGrid: request.showBeatGrid,
                         beatTimelineOffsetSeconds: request.beatOffset,
@@ -3003,19 +3064,24 @@ private struct ReferenceMotionDetailView: View {
                             ReferenceReviewPlaybackOverlay(controller: controller,
                                 takeID: takeID, viewport: page.chart.frame.timeRange)
                         }
+                    ReferenceReviewMovementReadout(controller: controller, takeID: takeID,
+                        movements: prepared.movements, usesSamplePosition: prepared.usesSamplePosition)
                     Text(page.isMovementDetail
                         ? "Movement detail changes each movement’s height. Do not compare speed from slopes between movements."
-                        : "Recorded travel · one shared scale: gentler slopes mean slower movement; steeper slopes mean faster movement.")
+                        : (request.enhancesMovement
+                            ? "Movement detail is unavailable for this evidence; recorded travel is shown."
+                            : "Recorded travel · one shared scale: gentler slopes mean slower movement; steeper slopes mean faster movement."))
                         .font(.caption2).foregroundStyle(.secondary)
-                        .frame(minHeight: 28, alignment: .topLeading)
-                    if request.enhancesMovement && !page.isMovementDetail {
-                        Text("Movement detail is unavailable for this evidence; recorded travel is shown.")
-                            .font(.caption2).foregroundStyle(.secondary)
-                    }
+                        .frame(height: 28, alignment: .topLeading)
+                    Text("Shaded ? intervals mark uncertain motion; the curve is withheld where the evidence is insufficient.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .opacity(page.chart.geometry.missingMotion.isEmpty ? 0 : 1)
+                        .frame(height: 28, alignment: .topLeading)
                     Text(prepared.usesSamplePosition
                         ? "Sample position · loop/cue restarts return to centre"
                         : (request.unavailableReason ?? "Recorded motion · sample restart timing unavailable"))
                         .font(.caption2).foregroundStyle(.secondary)
+                        .frame(height: 16, alignment: .topLeading)
                     HStack {
                         Text("WHOLE TAKE · RECORDED TRAVEL")
                             .font(.system(size: 9, weight: .bold, design: .monospaced))
@@ -3024,7 +3090,7 @@ private struct ReferenceMotionDetailView: View {
                             Text(canEdit ? "Drag the box to move the repetition · drag its edges to trim" : "Repetition bounds · read-only")
                                 .font(.caption2)
                         }
-                    }.foregroundStyle(.secondary)
+                    }.foregroundStyle(.secondary).frame(height: 16)
                     ScratchPhraseChartView(source: .preparedCanonical(prepared.overview),
                         bpm: request.fullFrame.beatsPerMinute, showBeatGrid: false,
                         showsMixerFaderLanes: true, backgroundColor: .clear)
@@ -3054,16 +3120,18 @@ private struct ReferenceMotionDetailView: View {
             } else {
                 Text("Preparing repetition notation…")
                     .font(.caption).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity).frame(height: height + 145)
+                    .frame(maxWidth: .infinity).frame(height: height + 284)
             }
         }
         .task(id: request) {
             let input = request
+            let requestedTakeID = takeID
             let work = Task.detached(priority: .userInitiated) { ReferenceMotionDetailPages.prepare(input) }
             let result = await withTaskCancellationHandler(operation: { await work.value },
                 onCancel: { work.cancel() })
-            guard !Task.isCancelled else { return }
-            preparedTakeID = takeID
+            guard !Task.isCancelled, input == request, requestedTakeID == takeID else { return }
+            preparedTakeID = requestedTakeID
+            preparedRequest = input
             prepared = result
         }
         .onChange(of: request) { _, source in
