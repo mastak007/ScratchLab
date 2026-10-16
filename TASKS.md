@@ -1,6 +1,6 @@
-## Current explicit user task — review readability, 16 October 2026
+## Completed explicit user task — review readability, 17 October 2026
 
-- [ ] Correct the review-only duplicate vertical inset and arbitrary midpoint guide; retain full repetition/eight-second context and common-scale measured motion. Add a bounded playhead direction/duration/speed readout with honest uncertainty; verify actual saved95 evidence, software/all-platform gates, signed app and installed review. Raw/canonical evidence and physical acceptance remain separate.
+- [x] Correct the review-only duplicate vertical inset and arbitrary midpoint guide; retain full repetition/eight-second context and common-scale measured motion. Add a bounded playhead direction/duration/speed readout with honest uncertainty; verify actual saved95 evidence, software/all-platform gates, signed app and installed review. Raw/canonical evidence and physical acceptance remain separate. Exact-source full gates, signed universal installation and sampled live readout/playback/layout checks PASS. All 56 saved files and both clones preserved; see review-readability-resume/RESULT.md. Physical/audio, Intel and operator acceptance remain unconfirmed.
 
 ## Current explicit user task — recorded motion fidelity, 13 October 2026
 
