@@ -3083,16 +3083,18 @@ private struct ReferenceMotionDetailView: View {
                         : (request.display == .movementDetail
                             ? "Movement detail is unavailable for this evidence; recorded travel is shown."
                             : (prepared.usesSamplePosition
-                                ? "Sample playback coordinates · loop boundaries may split a scratch. Use Recorded travel to compare platter speed."
+                                ? "Software sample phase · 0% start / 100% end. Wrap breaks are sample boundaries, not platter returns."
                                 : "Recorded travel · one shared scale: gentler slopes mean slower movement; steeper slopes mean faster movement.")))
                         .font(.caption2).foregroundStyle(.secondary)
                         .frame(height: 28, alignment: .topLeading)
-                    Text("Shaded ? intervals mark uncertain motion; the curve is withheld where the evidence is insufficient.")
+                    Text(prepared.usesSamplePosition
+                        ? "Shaded intervals mark unavailable playback history; no connecting path is invented."
+                        : "Shaded ? intervals mark uncertain motion; the curve is withheld where the evidence is insufficient.")
                         .font(.caption2).foregroundStyle(.secondary)
                         .opacity(page.chart.geometry.missingMotion.isEmpty ? 0 : 1)
                         .frame(height: 28, alignment: .topLeading)
                     Text(prepared.usesSamplePosition
-                        ? "Sample position · recorded loop/cue boundaries"
+                        ? "Ticks = seam publications · CUE = witnessed restart · use Recorded travel for hand movement"
                         : (request.display == .samplePosition
                             ? (request.unavailableReason ?? "Sample position unavailable; recorded travel is shown.")
                             : "Continuous platter travel · sample boundaries do not reset this trace"))

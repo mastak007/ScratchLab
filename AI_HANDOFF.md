@@ -1,3 +1,37 @@
+# Batch 2 complete — 18 October 2026
+
+Canonical /Users/karlwatson/Developer/ScratchLab-CXL-Final-Capture-Fixes-20260913/source, branch codex/cxl-fader-checkpoint-20261003. Exact commit/remote identity: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-18/sample-phase-boundaries/GIT-RECEIPT.json (written after checkpoint). Protected untracked CoachDemoMotion/cxl_baby_target.json remains excluded/intact.
+
+Batch2 fixed explicit sample-phase semantics only. Ordinary.loop is a seam publication, not a restart/rotation: retain all supported intervals, wrap fixed0...1 sample phase with an honest pen-up; actual restart/unavailable/context/gap intervals remain unknown.70actual80seams=37forward+33back, generation9,0restart. Before/after repro removed1.166054583s presentation omission without changing raw positions, generations, audio, physical curves or schema.
+
+Verification full PASS:9496XCTest,1064namedSwiftTesting,123Python;124optional/integration skips. All102required selectors executed twice,28checked renders, all4platform builds. Focused28pass, red4expected failures. Native/platform supervisors reaped/no survivors. Source tree b7859171d42826365f689be3dfa2f288bd600a00, snapshot1a16be0d06f44b3e1da29482698ad982f3ff3e7feb8a2a948cb3436386633219,753paths; only final workflow docs differ. Candidate-source.tar + full receipts/images/scripts in durable18October sample-phase-boundaries. Runtime /private/tmp/sl-sample-phase-20261018. No test/build is still running.
+
+Signed DeveloperID universal arm64/x86_64 separate /Applications/SL Capture Sample Phase 2026-10-18.app installed, PID18838 at livecheck, executable 8c3853fcf6008dd900bb9dd406dd035b6b500f341beaab2dee49539f6f1513ad; package 07812eb7c659ef619d650f98adb83b7cd650942eac4f9fcd825bc9ae13495aa7. Stable CXL bundle/team2DDKGL33BU/permissions and previous7apps preserved.57original review files +3rawmedia +archives/demo unchanged. Approved80rep4 read-only preferred/bounds intact.
+
+Live explicit samplephase check: correct labels/edges/ticks, full19.14–27.14s, clocks21.05→27.13, whitecursor909→2615px;9static anchors exact in07/08. Left open physical Recorded travel100,1x,stopped20.94s. See live-ui/LIVE-UI-RECEIPT.json. Earlier mode/height/window/scroll changes unassigned; do NOT claim general no-jump or frame pacing. Real hotcue restart only synthetic in this batch (actual80hasnone); physical/audio/Intel/operator acceptance NOT RUN.
+
+Next authorized workflow is Batch3 from docs/notation_correction_prompts_20261017.md, not Batch4. Do not start until user asks. Audit physical depth/speed without inventing slow/fast asymmetry: actual first80 mean ratio0.9763/40mspeak1.0944, durations0.126662/0.150855s. Preserve full repetition/eightseconds and one affine physical scale; optional nonmetric emphasis stays explicit. Use existing pin/geometry, no second integrator. New testing cadence in AGENTS/SOUL: focused+affected build for routine UI; full for coherent shared/capture/data changes/release. Reuse exact current receipts where unaffected.
+
+User model recommendations (local cache and official docs checked): AstraHigh for2/3, SolHigh for1/4, SolMedium for5 (High for lag diagnosis); no model changed. Existing AppleScript/screenshots, install and Capture checkpoint/commit/push authorization persists.
+
+--- Previous handoff history below ---
+
+## Live verification checkpoint — full gate running
+
+Runtime `/private/tmp/sl-sample-phase-20261018`, unified exec session 79620. Do not start duplicate work. `warm` passed including dedicated-host repository preflight2/2. Focused `green`26/26 and `edge`2/2, no failures/skips; `red`4 expected failures. `prepare.py full` is running `scripts/build.sh all` through existing owned supervisors; native output is `focused-cache/output.log`, native receipt `focused-cache/receipt.json`, outer receipt `full/receipt.json`. Both must reap/no survivors. First configuration has over3200 XCTest passes, zero failures as of checkpoint; full is NOT yet PASS. Named slow checks actual80 (196.264s), actual95 detail (161.995s), every-technique archive (141.402s) passed in this configuration. Shared-geometry policy requires full gate before installation. Do not weaken or bypass it.
+
+Frozen source tree `b7859171d42826365f689be3dfa2f288bd600a00`, snapshotSHA256 `1a16be0d06f44b3e1da29482698ad982f3ff3e7feb8a2a948cb3436386633219`,753 paths. Current canonical difference from frozen is workflow docs only once this note is written. Product source must remain identical. Exact candidate tar, focused artifacts, root-cause and coordinate contract archived under `2026-10-18/sample-phase-boundaries`. Source archive is candidate, not a release. Existing installed Explicit Review app remains unchanged; all seven installed Capture executable hashes recorded in `installed-apps-before.json`.
+
+After full pass, manually compare changed sample renders and matching remaining renders, write runtime VISUAL-REVIEW.json, run `prepare.py stage` (new separate Sample Phase name). Guarded `install_candidate.py` is prepared, not run; requires full/stage/visual PASS and all Capture apps closed normally. Existing AppleScript/screenshot/install/commit/push authorization persists. Runtime read-only `review.applescript PID` and `app-state.applescript PID` prepared. Inspect fresh UI before pressing any indices. Preserve57original files, rawmedia3, archives/demo, approved80rep4 and historical95edits. Test play/phase choices on originals without approving/editing/re-saving. Then docs, audit, archive, checkpoint/push. Do not start Batch3.
+
+User asked model recommendations: provided table Astra High forBatch2/3; Sol High for1/4; Sol Medium for5 (High if diagnosing lag), verified current local models + official docs. No model switched. Latest ETA given30–45minutes remaining while native had2957passes at11.3min; it is an estimate, refresh honestly if asked.
+
+---
+
+# Active Batch 2 — 18 October 2026
+
+User authorized next correction batch. Canonical root/branch unchanged; protected untracked cxl_baby_target.json intact. See /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-18/sample-phase-boundaries and /private/tmp/sl-sample-phase-20261018. Red actual/synthetic 4 expected failures; initial green 26 PASS/0 fail/skip. Exact negative/multiple seam edge check running; full shared-geometry gate required after it. Do not install or claim complete until required checks pass. Existing Explicit Review app remains installed/running and original saved 80 BPM approved rep4 preserved. All work before this section remains historical.
+
 # 18 October 2026 — explicit display correction installed under targeted development policy
 
 Root cause: the detail view silently used recorded sample-playback coordinates even when Recorded travel was selected. Sample-seam fragments could then receive nonlinear movement emphasis. The committed correction makes Recorded travel the physical default, separates physical Movement detail and explicit Sample position, retains the full repetition/minimum-eight-second main view, physical overview/readout and request ownership. No capture/controller/decoder/calibration/schema/export/Practice change.

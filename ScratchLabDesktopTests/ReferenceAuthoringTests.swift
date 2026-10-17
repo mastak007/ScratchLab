@@ -10,6 +10,7 @@
 // a controller or a take on disk.
 
 import AVFoundation
+import SwiftUI
 import XCTest
 @testable import ScratchLab
 
@@ -252,7 +253,113 @@ final class RecordedSamplePlaybackGeometryTests: XCTestCase {
                            coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 95))
     }
 
-    func testRecordedLoopsAndCueRebaseAtCentreWithoutReverseConnectors() throws {
+    func testPhaseRecrossingPreservesEverySupportedIntervalWithoutRecentering() throws {
+        let source = timeline([
+            point(0, 90), point(0.04, 110, kind: .loop),
+            point(0.08, 90, kind: .loop), point(0.12, 110, kind: .loop),
+            point(0.16, 100), point(0.20, 90), point(0.24, -10, kind: .loop)
+        ])
+        let chart = try XCTUnwrap(Geometry.samplePlaybackChart(timeline: source, records: [], frame: frame()))
+        let segments = chart.prepared.geometry.motion.segments
+        XCTAssertEqual(chart.prepared.frame.positionRange, -0.125...1.125)
+        XCTAssertEqual(segments.reduce(0) { $0 + $1.endTime - $1.startTime }, 0.24, accuracy: 1e-12,
+                       "A loop publication cannot omit the preceding movement interval")
+        func phase(_ position: CGFloat) -> Double { Double(position) * 1.25 - 0.125 }
+        let first = try XCTUnwrap(segments.first)
+        XCTAssertEqual(first.startTime, 0)
+        XCTAssertEqual(first.endTime, 0.02, accuracy: 1e-12)
+        XCTAssertEqual(phase(first.startPosition), 0.9, accuracy: 1e-12)
+        XCTAssertEqual(phase(first.endPosition), 1, accuracy: 1e-12)
+        let after = try XCTUnwrap(segments.first { abs($0.startTime - 0.02) < 1e-12 })
+        XCTAssertEqual(phase(after.startPosition), 0, accuracy: 1e-12)
+        XCTAssertEqual(phase(after.endPosition), 0.1, accuracy: 1e-12)
+        XCTAssertEqual(chart.resets.map(\.time), [0.04, 0.08, 0.12, 0.24],
+                       "Markers retain observation times, not interpolated crossing times")
+        XCTAssertEqual(chart.prepared.geometry.missingMotion, [0.24...1])
+        for segment in segments {
+            let forward = segment.endTime <= 0.04 || (segment.startTime >= 0.08 && segment.endTime <= 0.12)
+            XCTAssertEqual(segment.kind, .stroke(forward ? .forward : .backward))
+            XCTAssertTrue((0...1).contains(phase(segment.startPosition)))
+            XCTAssertTrue((0...1).contains(phase(segment.endPosition)))
+        }
+        XCTAssertEqual(source.observations.count, 7)
+    }
+
+    func testMultipleAndExactNegativeSeamsKeepDirectionDurationAndDistance() throws {
+        let source = timeline([point(0, -25), point(0.04, 225, kind: .loop),
+            point(0.08, 200), point(0.12, 0, kind: .loop), point(0.16, -200, kind: .loop)])
+        let chart = try XCTUnwrap(Geometry.samplePlaybackChart(timeline: source, records: [], frame: frame()))
+        let segments = chart.prepared.geometry.motion.segments
+        XCTAssertEqual(segments.count, 9)
+        XCTAssertEqual(segments.reduce(0) { $0 + $1.endTime - $1.startTime }, 0.16, accuracy: 1e-12)
+        XCTAssertEqual(segments.reduce(0.0) { $0 + Double($1.travel) * 1.25 }, 6.75, accuracy: 1e-12)
+        XCTAssertTrue(segments.filter { $0.endTime <= 0.04 }.allSatisfy { $0.kind == .stroke(.forward) })
+        XCTAssertTrue(segments.filter { $0.startTime >= 0.04 }.allSatisfy { $0.kind == .stroke(.backward) })
+        XCTAssertEqual(chart.resets.map(\.time), [0.04, 0.12, 0.16],
+                       "Interpolated multi-seam crossings do not invent observed loop records")
+    }
+
+    @MainActor
+    func testSupplied80BPMPhasePreservesLoopIntervalsAndSourceEvidence() throws {
+        guard let path = ProcessInfo.processInfo.environment["SL_80BPM_REVIEW_EVIDENCE_PATH"] else {
+            throw XCTSkip("Supply saved 80 BPM take 61C07A3D.")
+        }
+        let bytes = try Data(contentsOf: URL(fileURLWithPath: path))
+        let document = try ReferenceTearEvidenceCodec.decodeDocument(bytes)
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self,
+            from: document.sourceBinding.rawSidecarData)
+        let source = try XCTUnwrap(sidecar.samplePlayback)
+        let before = source
+        let display = try XCTUnwrap(Geometry.CanonicalFrame(timeRange: 0...source.duration,
+            positionRange: -1...1, coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 80))
+        let chart = try XCTUnwrap(Geometry.samplePlaybackChart(timeline: source, records: [], frame: display))
+        let segments = chart.prepared.geometry.motion.segments
+        // Render even on the red run, so the comparison uses the same renderer and source.
+        if let directory = ProcessInfo.processInfo.environment["SL_REVIEW_PLAYHEAD_RENDER_DIRECTORY"] {
+            let first = try XCTUnwrap(chart.windowed(to: 0...1.1))
+            let view = VStack(alignment: .leading) {
+                Text("SAVED 80 BPM · SOFTWARE SAMPLE PHASE · FIRST 1.1 s")
+                ScratchPhraseChartView(source: .preparedCanonical(first.prepared), bpm: 80,
+                    showsMixerFaderLanes: true, reviewDetail: true,
+                    sampleResetMarkers: first.resets, samplePosition: true, backgroundColor: .clear)
+                    .frame(height: 320)
+            }.padding(16).frame(width: 1100).foregroundStyle(.white)
+                .background(Color.black).environment(\.colorScheme, .dark)
+            let renderer = ImageRenderer(content: view); renderer.scale = 1
+            let bitmap = NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
+            let folder = URL(fileURLWithPath: directory, isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                .write(to: folder.appendingPathComponent("actual80-sample-phase.png"))
+        }
+        XCTAssertEqual(source.observations.filter { $0.kind == .loop }.count, 70)
+        XCTAssertEqual(source.observations.filter { $0.kind == .sampleRestart }.count, 0)
+        XCTAssertEqual(chart.resets.count, 70)
+        var duration = 0.0
+        var forward = 0, backward = 0
+        for (a, b) in zip(source.observations, source.observations.dropFirst()) {
+            guard a.kind != .unavailable, b.kind != .unavailable, b.kind != .sampleRestart,
+                  a.sampleID == b.sampleID, a.generation == b.generation,
+                  a.loopLengthInSteps == b.loopLengthInSteps, b.time - a.time <= 0.1 else { continue }
+            duration += b.time - a.time
+            if b.kind == .loop {
+                if try XCTUnwrap(b.positionSteps) > XCTUnwrap(a.positionSteps) { forward += 1 }
+                else { backward += 1 }
+                let covered = segments.reduce(0.0) { sum, segment in
+                    sum + max(0, min(segment.endTime, b.time) - max(segment.startTime, a.time))
+                }
+                XCTAssertEqual(covered, b.time - a.time, accuracy: 1e-11,
+                               "The saved seam at \(b.time) cannot erase motion")
+            }
+        }
+        XCTAssertEqual(forward, 37); XCTAssertEqual(backward, 33)
+        XCTAssertEqual(segments.reduce(0) { $0 + $1.endTime - $1.startTime }, duration, accuracy: 1e-10)
+        XCTAssertEqual(source, before)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), bytes)
+    }
+
+    func testRecordedLoopsAndCueWrapPhaseWithoutReverseConnectors() throws {
         let source = timeline([
             point(0, 0), point(0.04, 25), point(0.08, 50),
             point(0.12, 100, kind: .loop), point(0.16, 125), point(0.20, 100),
@@ -262,31 +369,21 @@ final class RecordedSamplePlaybackGeometryTests: XCTestCase {
         ])
         let chart = try XCTUnwrap(Geometry.samplePlaybackChart(timeline: source, records: [], frame: frame()))
         let segments = chart.prepared.geometry.motion.segments
-        XCTAssertEqual(chart.centreFraction, 0.5)
         XCTAssertEqual(chart.resets, [.init(time: 0.12, kind: .loop), .init(time: 0.24, kind: .loop),
                                       .init(time: 0.36, kind: .sampleRestart)])
-        XCTAssertEqual(segments.count, 8)
-        for time in [0.0, 0.12, 0.24, 0.36] {
-            let segment = try XCTUnwrap(segments.first { $0.startTime == time })
-            XCTAssertEqual(segment.startPosition, 0.5, accuracy: 1e-12)
-        }
-        for reset in chart.resets {
-            XCTAssertFalse(segments.contains { $0.startTime < reset.time && $0.endTime >= reset.time },
-                           "A reset is a pen-up, never a fictitious reverse stroke")
-        }
-        XCTAssertEqual(segments.map(\.kind), [.stroke(.forward), .stroke(.forward),
-            .stroke(.forward), .stroke(.backward), .stroke(.backward), .stroke(.backward),
-            .stroke(.forward), .stroke(.backward)])
-        XCTAssertEqual(segments[0].travel, segments[2].travel, accuracy: 1e-12)
-        XCTAssertEqual(segments[0].travel, segments[4].travel, accuracy: 1e-12)
-        XCTAssertTrue(segments.allSatisfy { (0...1).contains($0.startPosition) && (0...1).contains($0.endPosition) })
-        XCTAssertEqual(chart.prepared.geometry.missingMotion, [0.32...0.36, 0.44...1],
-                       "Proven same-context loops are pen-ups, while the sample-load gap stays unknown")
+        XCTAssertEqual(segments.count, 11)
+        XCTAssertEqual(segments.reduce(0) { $0 + $1.endTime - $1.startTime }, 0.40, accuracy: 1e-12)
+        let restarted = try XCTUnwrap(segments.first { $0.startTime == 0.36 })
+        XCTAssertEqual(restarted.startPosition, 0.1, accuracy: 1e-12,
+                       "Cue position zero is the sample start, not an arbitrary centre")
+        XCTAssertFalse(segments.contains { $0.startTime < 0.36 && $0.endTime > 0.32 },
+                       "A cue is a pen-up; its jump is never a reverse stroke")
+        XCTAssertTrue(segments.allSatisfy { (0.1...0.9).contains($0.startPosition) && (0.1...0.9).contains($0.endPosition) })
+        XCTAssertEqual(chart.prepared.geometry.missingMotion, [0.32...0.36, 0.44...1])
         let seam = try XCTUnwrap(chart.windowed(to: 0.09...0.11))
-        XCTAssertTrue(seam.prepared.geometry.motion.segments.isEmpty,
-                      "The known loop seam has no invented connector")
-        XCTAssertTrue(seam.prepared.geometry.missingMotion.isEmpty,
-                      "The intentional loop pen-up is not an unknown playback interval")
+        XCTAssertEqual(seam.prepared.geometry.motion.segments.count, 1,
+                       "The interval before a seam publication remains visible")
+        XCTAssertTrue(seam.prepared.geometry.missingMotion.isEmpty)
     }
 
     func testLoopMarkerCannotEraseUnavailableContextChangeOrLongGap() throws {
@@ -331,7 +428,8 @@ final class RecordedSamplePlaybackGeometryTests: XCTestCase {
         let segments = chart.prepared.geometry.motion.segments
         XCTAssertEqual(segments.count, 6)
         XCTAssertTrue(chart.resets.isEmpty, "Recovering context is not an AHH restart")
-        XCTAssertTrue(segments.allSatisfy { $0.startPosition == 0.5 })
+        XCTAssertEqual(segments.map { Double($0.startPosition) }, [0.1, 0.5, 0.1, 0.9, 0.1, 0.5],
+                       "Recovering context retains absolute sample phase, including negative positions")
         for segment in segments {
             XCTAssertEqual(segment.travel, try XCTUnwrap(segments.first).travel, accuracy: 1e-12,
                            "Equal travel in each sample's loop units keeps the same height")
@@ -342,6 +440,21 @@ final class RecordedSamplePlaybackGeometryTests: XCTestCase {
         let emptyPage = try XCTUnwrap(chart.windowed(to: 0.5...0.6))
         XCTAssertTrue(emptyPage.prepared.geometry.motion.isEmpty)
         XCTAssertEqual(emptyPage.prepared.geometry.missingMotion, [0.5...0.6])
+    }
+
+    func testWitnessedRestartAndUnavailableRecoveryNeverInventConnectingMotion() throws {
+        let source = timeline([point(0, 25), point(0.04, 30),
+            point(0.08, 0, kind: .sampleRestart, generation: 2), point(0.12, 10, generation: 2),
+            unavailable(0.16), point(0.20, 75, generation: 2), point(0.24, 80, generation: 2)])
+        let chart = try XCTUnwrap(Geometry.samplePlaybackChart(timeline: source, records: [], frame: frame()))
+        XCTAssertEqual(chart.resets, [.init(time: 0.08, kind: .sampleRestart)])
+        XCTAssertEqual(chart.prepared.geometry.missingMotion, [0.04...0.08, 0.12...0.20, 0.24...1])
+        let segments = chart.prepared.geometry.motion.segments
+        XCTAssertEqual(segments.count, 3)
+        XCTAssertEqual(try XCTUnwrap(segments.last).startPosition, 0.7, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(segments.last).endPosition, 0.74, accuracy: 1e-12)
+        XCTAssertEqual(segments.map(\.startTime), [0, 0.08, 0.20])
+        XCTAssertEqual(segments.map(\.endTime), [0.04, 0.12, 0.24])
     }
 
     func testAllWindowsRetainOneLoopUnitScaleAndClipPreparedGeometry() throws {
@@ -459,13 +572,13 @@ final class RecordedSamplePlaybackGeometryTests: XCTestCase {
         }
     }
 
-    func testObservedStationaryPublicationsRemainCentredWithoutInventingMovement() throws {
+    func testObservedStationaryPublicationsRetainPhaseWithoutInventingMovement() throws {
         let chart = try XCTUnwrap(Geometry.samplePlaybackChart(
             timeline: timeline([point(0, 700), point(0.04, 700), point(0.08, 700)]),
             records: [], frame: frame()))
         XCTAssertEqual(chart.prepared.geometry.motion.segments.count, 2)
         XCTAssertTrue(chart.prepared.geometry.motion.segments.allSatisfy {
-            $0.kind == .hold && $0.startPosition == 0.5 && $0.endPosition == 0.5 && $0.drawsLine
+            $0.kind == .hold && $0.startPosition == 0.1 && $0.endPosition == 0.1 && $0.drawsLine
         })
         XCTAssertTrue(chart.resets.isEmpty)
     }

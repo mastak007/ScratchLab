@@ -668,15 +668,15 @@ extension ScratchStrokeGeometry {
     }
 
     struct PlaybackResetMarker: Equatable, Sendable {
+        // Historical .loop means a seam publication, not a sample restart.
         enum Kind: Equatable, Sendable { case loop, sampleRestart }
         let time: Double
         let kind: Kind
     }
 
-    /// Separate from physical platter evidence. Positions describe recorded
-    /// software sample-control publications, expressed in sample-loop units
-    /// relative to each continuous run's origin. Only a witnessed loop/restart
-    /// receives a reset marker; acquiring or recovering context does not.
+    /// Separate from physical platter evidence: 0 is the sample-loop start,
+    /// 1 its end. Ordinary seam recrossings wrap phase, never rebase travel.
+    /// Markers retain publication times, not interpolated crossing times.
     struct SamplePlaybackChart: Equatable, Sendable {
         let prepared: PreparedCanonicalChart
         let resets: [PlaybackResetMarker]
@@ -752,8 +752,13 @@ extension ScratchStrokeGeometry {
         var resets: [PlaybackResetMarker] = []
         var previous: Point?
         var previousTime: Double?
-        var origin = 0.0
-        var radius = 0.0
+        // Fixed sample-loop units, including clearance for the two edges.
+        let lower = -0.125, upper = 1.125
+        let extent = upper - lower
+        func phase(_ position: Double) -> Double {
+            let remainder = position.truncatingRemainder(dividingBy: 1)
+            return remainder < 0 ? remainder + 1 : remainder
+        }
         for observation in timeline.observations {
             guard observation.time.isFinite, observation.time >= 0,
                   observation.time <= timeline.duration,
@@ -770,8 +775,12 @@ extension ScratchStrokeGeometry {
                   let period = observation.loopLengthInSteps, period.isFinite, period > 0 else { return nil }
             let point = Point(time: observation.time, sample: sample, generation: generation,
                               position: position, period: period)
-            let isReset = observation.kind == .loop || observation.kind == .sampleRestart
-            if isReset {
+            let units = position / period
+            // Fail closed when the saved values cannot resolve phase or when
+            // division loses a nonzero position. Never manufacture a flat line.
+            guard units.isFinite, abs(units) < 0x1p52,
+                  position == 0 || units != 0 else { return nil }
+            if observation.kind == .loop || observation.kind == .sampleRestart {
                 resets.append(.init(time: point.time,
                     kind: observation.kind == .loop ? .loop : .sampleRestart))
             }
@@ -779,34 +788,35 @@ extension ScratchStrokeGeometry {
                 before.sample == sample && before.generation == generation && before.period == period
                     && point.time - before.time <= 0.1
             } ?? false
-            if let before = previous, continuousContext, observation.kind == .loop {
-                // A recorded same-context loop is an intentional display
-                // pen-up, not unavailable sample evidence. Keep the interval
-                // free of an unknown band without inventing a phase path.
+            if let before = previous, continuousContext, observation.kind != .sampleRestart {
+                let from = before.position / period, delta = units - from
+                guard delta.isFinite, position == before.position || delta != 0 else { return nil }
+                let forward = delta > 0
+                var cursor = before.time
+                var startPhase = phase(from)
+                // An exact seam departs from the end when travelling backward.
+                if delta < 0 && startPhase == 0 { startPhase = 1 }
+                var boundary = forward ? floor(from) + 1 : ceil(from) - 1
+                while delta != 0 && (forward ? boundary <= units : boundary >= units) {
+                    guard spans.count < RecordedPlaybackLoopRecorder.maximumObservations else { return nil }
+                    let time = before.time + (point.time - before.time) * ((boundary - from) / delta)
+                    guard time.isFinite, time > cursor, time <= point.time else { return nil }
+                    spans.append(Span(start: cursor, end: time, from: startPhase, to: forward ? 1 : 0))
+                    cursor = time
+                    startPhase = forward ? 0 : 1
+                    boundary += forward ? 1 : -1
+                }
+                if cursor < point.time {
+                    guard spans.count < RecordedPlaybackLoopRecorder.maximumObservations else { return nil }
+                    spans.append(Span(start: cursor, end: point.time, from: startPhase, to: phase(units)))
+                }
                 supportedRanges.append(before.time...point.time)
-            }
-            if let before = previous, !isReset, continuousContext {
-                let fromOffset = before.position - origin, toOffset = position - origin
-                let from = fromOffset / period, to = toOffset / period
-                guard from.isFinite, to.isFinite, (to - from).isFinite,
-                      fromOffset == 0 || from != 0,
-                      toOffset == 0 || to != 0 else { return nil }
-                spans.append(Span(start: before.time, end: point.time, from: from, to: to))
-                supportedRanges.append(before.time...point.time)
-                radius = max(radius, max(abs(from), abs(to)))
-            } else {
-                // A pen-up at a witnessed reset or an evidence discontinuity.
-                // The first subsequent segment starts at the centre; no line
-                // falsely describes the reset as a reverse platter movement.
-                origin = position
             }
             previous = point
         }
         guard !spans.isEmpty else { return nil }
-        let extent = radius > 0 ? radius * 1.125 : 0.5
-        guard extent.isFinite, extent > 0, (extent * 2).isFinite,
-              let sampleFrame = CanonicalFrame(timeRange: frame.timeRange,
-                positionRange: -extent...extent, coordinateSpace: .samplePosition,
+        guard let sampleFrame = CanonicalFrame(timeRange: frame.timeRange,
+                positionRange: lower...upper, coordinateSpace: .samplePosition,
                 beatsPerMinute: frame.beatsPerMinute) else { return nil }
         // Canonical records supply only independent fader evidence here.
         // Their physical path and unknown regions remain in the overview.
@@ -827,7 +837,7 @@ extension ScratchStrokeGeometry {
                 guard stop > cursor else { return nil }
                 func fraction(at time: Double) -> CGFloat {
                     let value = span.from + (span.to - span.from) * ((time - span.start) / (span.end - span.start))
-                    return CGFloat(0.5 + value / (extent * 2))
+                    return CGFloat((value - lower) / extent)
                 }
                 let from = fraction(at: cursor), to = fraction(at: stop)
                 guard from.isFinite, to.isFinite else { return nil }

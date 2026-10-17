@@ -1,7 +1,12 @@
+## Current explicit user task — sample boundaries, 18 October 2026
+
+- [x] Batch 2: correct explicit Sample position phase/seam/restart semantics using saved80BPM61C07A3D. Red4, focused28PASS, full9496XCTest/1064namedSwiftTesting/123PythonPASS with124optional/integration skips; all102required selectors ran twice,28renders and4platform builds passed. Signed universal separate app installed and bounded live phase/playhead review passed;57review files,3rawmedia,7previous apps preserved. General mode-switch/no-jump, real cue/audio/Intel/operator acceptance remain unconfirmed; depth/export remain later batches. See18October sample-phase-boundaries/RESULT.md.
+- [ ] Batch 3: audit and correct learner-readable physical depth with truthful speed, complete repetition/eight-second context and existing evidence. Follow docs/notation_correction_prompts_20261017.md; do not reinterpret sample seams as physical origins or invent fast pullbacks.
+
 ## Completed explicit user task — review representation,17–18October2026
 
 - [x] Make Recorded travel the actual physical-motion default with sample history; keep physical Movement detail and explicit Sample position separate. Under the user's explicit targeted-development policy: matching focused8 plus fresh playback2 passed, eight matching renders reused, signed universal Mac build/ZIP/install/live UI/preservation passed. Existing test-helper readiness race reproduced red2/2 and repaired green2/2 without changing product clock/timeout/interval/identity/loss assertions. All57 original files and both older apps preserved. See18October explicit-review-resume/RESULT.md. Checkpoint/push identity is in GIT-RECEIPT.json.
-- [ ] Before releasing the combined candidate, complete the full98-selector/27-render/all-platform gate. Explicitly deferred by user for this development iteration; neither interrupted run is a pass. Next implementation batches remain in docs/notation_correction_prompts_20261017.md; shared/capture/data changes still require the full gate under the new policy.
+- [x] Complete the previously deferred software/build gate: superseded by Batch2 exact-source102-required-selector/28-render/all-platform PASS on18October. Both earlier interrupted runs remain incomplete, never passes. This clears the software/build requirement only; physical/operator/release acceptance remains separate.
 
 
 ## Completed explicit user task — review readability, 17 October 2026

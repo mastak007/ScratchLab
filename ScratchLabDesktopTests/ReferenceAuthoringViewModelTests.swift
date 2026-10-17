@@ -5609,7 +5609,7 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
         XCTAssertEqual(detail.overview, .init(records: records, layer: .performance, frame: frame))
         XCTAssertEqual(detail.pages[0].resets.map(\.time), [0, 1])
         let restartedSegment = try XCTUnwrap(detail.pages[0].chart.geometry.motion.segments.first { $0.startTime == 1 })
-        XCTAssertEqual(restartedSegment.startPosition, 0.5)
+        XCTAssertEqual(restartedSegment.startPosition, 0.1, accuracy: 1e-12)
         XCTAssertFalse(detail.pages[0].chart.geometry.motion.segments.contains { $0.startTime < 1 && $0.endTime > 1 },
                        "A recorded loop must not draw a fabricated return stroke")
         let travel = ReferenceMotionDetailPages.prepare(.init(records: records, fullFrame: frame,

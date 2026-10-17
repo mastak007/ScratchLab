@@ -205,13 +205,27 @@ struct ScratchPhraseChartView: View {
         for marker in sampleResetMarkers where frame.timeRange.contains(marker.time) {
             let x = CGFloat(marker.time - start) * pps
             var line = Path()
-            line.move(to: CGPoint(x: x, y: 18))
-            line.addLine(to: CGPoint(x: x, y: platterHeight - 18))
+            // A seam publication is only a small timing tick. It is neither
+            // an exact interpolated crossing time nor a witnessed hot cue.
+            line.move(to: CGPoint(x: x, y: marker.kind == .loop ? 12 : 18))
+            line.addLine(to: CGPoint(x: x, y: marker.kind == .loop ? 20 : platterHeight - 18))
             platterContext.stroke(line, with: .color(.orange.opacity(0.65)),
-                style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-            platterContext.draw(Text(marker.kind == .loop ? "LOOP" : "CUE")
-                .font(.system(size: 8, weight: .bold)).foregroundStyle(.orange),
-                at: CGPoint(x: min(size.width - 18, max(18, x)), y: 23))
+                style: StrokeStyle(lineWidth: 1, dash: marker.kind == .loop ? [] : [3, 3]))
+            if marker.kind == .sampleRestart {
+                platterContext.draw(Text("CUE")
+                    .font(.system(size: 8, weight: .bold)).foregroundStyle(.orange),
+                    at: CGPoint(x: min(size.width - 18, max(18, x)), y: 23))
+            }
+        }
+        if samplePosition {
+            // The phase chart uses -0.125...1.125, with this renderer's inset.
+            let inset = canonicalMotionInsetFraction
+            let upper = (inset + (1 - 2 * inset) * 0.1) * platterHeight
+            let lower = platterHeight - upper
+            for (label, y) in [("100% · END", upper - 8), ("0% · START", lower + 8)] {
+                platterContext.draw(Text(label).font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(.secondary), at: CGPoint(x: size.width - 4, y: y), anchor: .trailing)
+            }
         }
         drawUnknownIntervals(geometry.missingMotion, label: samplePosition ? "PLAYBACK UNKNOWN" : "MOTION UNKNOWN", ctx: platterContext,
                              start: start, pps: pps, top: 16, height: max(0, platterHeight - 30))
