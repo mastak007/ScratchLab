@@ -1,3 +1,8 @@
+## Current explicit user task — Batch 5 and question-mark investigation, 18 October 2026
+
+- [x] Investigate question-mark causes and complete bounded Batch5 on installed c09ed21. Found16confidence-only omissions plus separate packet/noise-gate gaps. Controlled cursor/readout/inspection/modes/body/in/out/save-reopen-export and preservation PASS; identical product source permits reuse of Batch4 software/build receipts. Intel/recording-load/physical/audio/operator acceptance NOT RUN; bounded Intel checklist prepared. No product/threshold/projection edits. See docs/notation_batch5_findings_20261018.md.
+- [ ] Follow-up: correct visibility of confidence-only accepted telemetry separately from canonical eligibility and approved historical projections; proposal and continuation prompt in the findings document. Implementation not started.
+
 ## Completed explicit user task — notation batches 2–4, 18 October 2026
 
 - [x] Batch 2: correct explicit Sample position phase/seam/restart semantics using saved80BPM61C07A3D. Red4, focused28PASS, full9496XCTest/1064namedSwiftTesting/123PythonPASS with124optional/integration skips; all102required selectors ran twice,28renders and4platform builds passed. Signed universal separate app installed and bounded live phase/playhead review passed;57review files,3rawmedia,7previous apps preserved. General mode-switch/no-jump, real cue/audio/Intel/operator acceptance remain unconfirmed; depth/export remain later batches. See18October sample-phase-boundaries/RESULT.md.
