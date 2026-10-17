@@ -9,7 +9,8 @@ enum ReferenceNotationPNGExport {
     static let width = 1600
     static let height = 1420
     static let secondsPerRow = 4.0
-    static let rowsPerPage = 4
+    static let rowsPerPage = 2
+    static let chartHeight: CGFloat = 440
 
     struct Request: Encodable, Sendable {
         let performer: String
@@ -24,11 +25,13 @@ enum ReferenceNotationPNGExport {
         let beatTimelineOffsetSeconds: Double
         let projection: ReferenceTearCanonicalProjection?
         let sourceIdentity: String
+        let repetitions: [ReferenceReviewMetadataDocument.Repetition]
 
         init(performer: String, sessionID: String, takeID: String, takeNumber: Int,
              scratchType: String, bpm: Int, duration: Double, showBeatGrid: Bool,
              projection: ReferenceTearCanonicalProjection?, sourceIdentity: String,
-             beatsPerBar: Int = 4, beatTimelineOffsetSeconds: Double = 0) throws {
+             beatsPerBar: Int = 4, beatTimelineOffsetSeconds: Double = 0,
+             repetitions: [ReferenceReviewMetadataDocument.Repetition] = []) throws {
             // Bound allocations before converting an externally persisted duration to Int.
             guard duration.isFinite, duration > 0, duration <= 3600, bpm > 0, (1...32).contains(beatsPerBar),
                   beatTimelineOffsetSeconds.isFinite, beatTimelineOffsetSeconds >= 0 else {
@@ -40,12 +43,51 @@ enum ReferenceNotationPNGExport {
             self.beatTimelineOffsetSeconds = beatTimelineOffsetSeconds
             self.beatsPerBar = beatsPerBar
             self.projection = projection; self.sourceIdentity = sourceIdentity
+            self.repetitions = repetitions
         }
 
-        var identity: String { get throws { try ExportSemanticIdentity.digest(self) } }
+        // Internal derived-picture identity, not a stored capture/schema revision.
+        // Old pictures must not be mistaken for this layout at identical bounds.
+        private struct RenderIdentity: Encodable { let revision: Int; let request: Request }
+        var identity: String { get throws { try ExportSemanticIdentity.digest(RenderIdentity(revision: 2, request: self)) } }
+
+        struct RepetitionEdge {
+            let repetitionNumber: Int
+            let time: Double
+            let isStart: Bool
+        }
+
+        func repetitionEdges(in range: ClosedRange<Double>) -> [RepetitionEdge] {
+            repetitions.flatMap { repetition -> [RepetitionEdge] in
+                guard let start = repetition.startSeconds, let end = repetition.endSeconds,
+                      start.isFinite, end.isFinite, end > start else { return [] }
+                return [RepetitionEdge(repetitionNumber: repetition.repetitionNumber, time: start, isStart: true),
+                        RepetitionEdge(repetitionNumber: repetition.repetitionNumber, time: end, isStart: false)]
+                    .filter { range.contains($0.time) }
+            }
+        }
+
+        func repetitionDescription(in range: ClosedRange<Double>) -> String {
+            let descriptions = repetitions.compactMap { repetition -> String? in
+                guard let start = repetition.startSeconds, let end = repetition.endSeconds,
+                      start.isFinite, end.isFinite, end > start,
+                      start < range.upperBound, end > range.lowerBound else { return nil }
+                return String(format: "R%d in %.3f / out %.3f s", repetition.repetitionNumber, start, end)
+            }
+            return descriptions.isEmpty ? "No saved repetition timing for this row" : descriptions.joined(separator: " · ")
+        }
+
+        var coordinateDescription: String {
+            switch projection?.coordinateSpace {
+            case .normalizedTakeLocalDisplacement: "Take-local displacement · not revolutions; values differ between takes"
+            case .platterRevolutions: "Recorded platter revolutions"
+            case .samplePosition: "Source sample position · not physical platter travel"
+            case nil: "Coordinate scale unavailable"
+            }
+        }
 
         /// Whole bars for timed takes, never less than four seconds per row.
-        /// The lower bound also preserves the existing 225-page allocation limit.
+        /// The lower bound also preserves the bounded 450-page allocation limit.
         var rowDuration: Double {
             guard showBeatGrid else { return secondsPerRow }
             let barDuration = Double(beatsPerBar) * 60 / Double(bpm)
@@ -72,7 +114,8 @@ enum ReferenceNotationPNGExport {
             guard let projection else { return nil }
             return ScratchStrokeGeometry.CanonicalFrame(timeRange: range,
                 positionRange: projection.positionRange ?? -0.5...0.5,
-                coordinateSpace: projection.coordinateSpace, beatsPerMinute: Double(bpm))
+                coordinateSpace: projection.coordinateSpace, beatsPerMinute: Double(bpm))?
+                .fittingVisibleMotion(in: projection.records, layer: .performance)
         }
     }
 
@@ -114,7 +157,16 @@ enum ReferenceNotationPNGExport {
             .environment(\.colorScheme, .dark))
         renderer.scale = 1
         renderer.isOpaque = true
-        guard let image = renderer.cgImage else { throw SessionExportError.unableToRenderNotation }
+        // Pin the raster/color conversion as well as the geometry. The implicit
+        // cgImage path can vary antialiased channels by one level between calls.
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                bytesPerRow: width * 4, space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else {
+            throw SessionExportError.unableToRenderNotation
+        }
+        renderer.render(rasterizationScale: 1) { _, draw in draw(context) }
+        guard let image = context.makeImage() else { throw SessionExportError.unableToRenderNotation }
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
             throw SessionExportError.unableToRenderNotation
@@ -150,9 +202,15 @@ private struct ReferenceNotationPNGPage: View {
                 .font(.system(size: 12, design: .monospaced)).lineLimit(2)
             ForEach(Array(request.pageRanges[page].enumerated()), id: \.offset) { _, range in
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(String(format: "%.3f–%.3f seconds", range.lowerBound, range.upperBound))
-                        .font(.system(size: 14, design: .monospaced)).foregroundStyle(.secondary)
+                    Text(String(format: "%.3f–%.3f seconds", range.lowerBound, range.upperBound)
+                        + " · " + request.repetitionDescription(in: range))
+                        .font(.system(size: 14, design: .monospaced)).lineLimit(2)
+                        .frame(height: 34, alignment: .topLeading)
                     if let projection = request.projection, let frame = request.frame(for: range) {
+                        Text(String(format: "Y %.5g…%.5g · ", frame.positionRange.lowerBound, frame.positionRange.upperBound)
+                            + request.coordinateDescription)
+                            .font(.system(size: 13)).foregroundStyle(.secondary)
+                            .frame(height: 18, alignment: .topLeading)
                         GeometryReader { geometry in
                             // Enlarge the existing chart's strokes and labels only here.
                             // Its measured geometry and all other app charts are unchanged.
@@ -162,24 +220,36 @@ private struct ReferenceNotationPNGPage: View {
                                 source: .canonical(projection.records, layer: .performance, frame: frame),
                                 bpm: Double(request.bpm), showBeatGrid: request.showBeatGrid,
                                 beatTimelineOffsetSeconds: request.beatTimelineOffsetSeconds,
-                                mixerFaders: projection.mixerFaders, showsMixerFaderLanes: true,
+                                mixerFaders: projection.mixerFaders, showsMixerFaderLanes: true, reviewDetail: true,
                                 backgroundColor: .clear)
-                                .frame(width: width / scale, height: 240 / scale)
+                                .frame(width: width / scale, height: ReferenceNotationPNGExport.chartHeight / scale)
                                 .scaleEffect(scale, anchor: .topLeading)
-                                .frame(width: width, height: 240, alignment: .topLeading)
+                                .frame(width: width, height: ReferenceNotationPNGExport.chartHeight, alignment: .topLeading)
+                                .overlay {
+                                    Canvas { context, size in
+                                        for edge in request.repetitionEdges(in: range) {
+                                            let x = CGFloat((edge.time - range.lowerBound) / (range.upperBound - range.lowerBound)) * size.width
+                                            var line = Path(); line.move(to: .init(x: x, y: 0))
+                                            line.addLine(to: .init(x: x, y: size.height))
+                                            context.stroke(line, with: .color(.yellow.opacity(0.7)),
+                                                style: .init(lineWidth: 1, dash: edge.isStart ? [] : [5, 4]))
+                                        }
+                                    }
+                                }
                                 .clipped()
                         }
-                        .frame(height: 240)
+                        .frame(height: ReferenceNotationPNGExport.chartHeight)
                     } else {
                         Text("MOTION UNKNOWN — no saved canonical notation available")
-                            .foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 240)
+                            .foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: ReferenceNotationPNGExport.chartHeight)
                     }
                 }
             }
             Spacer(minLength: 0)
             Text("Dim/dashed platter = fader closed · Shaded gaps = unknown motion · Separate fader lanes retain recorded controls")
-            Text("Same time and position scale on every row. Blank space after the final row is outside the recording.")
-            Text("Travel uses this take’s saved coordinate scale. Visual reference only; not calibration, approval or training data.")
+            Text("Same time scale on every row. Each row has its own fixed linear height scale: compare slopes within a row, not across rows.")
+            Text("Gold lines = saved repetition in (solid) / out (dashed). Blank space after the final row is outside the recording.")
+            Text("Measured curves retain their original timing and shape. Visual reference only; not calibration, approval or training data.")
             Text("Motion gaps and confidence details are retained in the accompanying notation JSON.")
             Text("Page \(page + 1) of \(request.pageRanges.count) · \(request.duration, specifier: "%.3f") seconds total")
         }

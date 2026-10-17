@@ -1,7 +1,9 @@
-## Current explicit user task — readable physical depth, 18 October 2026
+## Completed explicit user task — notation batches 2–4, 18 October 2026
 
 - [x] Batch 2: correct explicit Sample position phase/seam/restart semantics using saved80BPM61C07A3D. Red4, focused28PASS, full9496XCTest/1064namedSwiftTesting/123PythonPASS with124optional/integration skips; all102required selectors ran twice,28renders and4platform builds passed. Signed universal separate app installed and bounded live phase/playhead review passed;57review files,3rawmedia,7previous apps preserved. General mode-switch/no-jump, real cue/audio/Intel/operator acceptance remain unconfirmed; depth/export remain later batches. See18October sample-phase-boundaries/RESULT.md.
 - [x] Batch 3: readable physical depth using a default pinned affine close-up beside the complete repetition (stacked narrowly), with explicit separate scales and no changed motion. Focused 30 required executions accepted, signed universal CXL Mac build/install and bounded live playback/pin/body/in/out/narrow/reopen checks PASS. All 57 original review files, three media and eight older apps preserved; only a labelled UI clone was trimmed. Physical/audio/Intel/operator acceptance NOT RUN. See 18 October physical-depth/RESULT.md. Batch 4 export readability remains next, only on user request.
+
+- [x] Batch 4: exported notation readability and meaning. Two tall affine-scaled rows/page, explicit units/limits, validated saved boundary markers and deterministic raster. Focused22/full9506XCTest+1064namedSwiftTesting+123Python and all four builds PASS; signed universal install, live before/after export (12 non-PNG artifacts identical), source preservation PASS. Wrapper escaped-marker postprocessing error reconciled against structured results, retained. Question-mark causes remain unresolved; no physical/audio/Intel/operator acceptance claim. See 18 October export-readability/RESULT.md.
 
 ## Completed explicit user task — review representation,17–18October2026
 

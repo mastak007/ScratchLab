@@ -1053,6 +1053,12 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         let document = try ReferenceReviewMetadataCodec.decodeDocument(data)
         let last = try XCTUnwrap(document.preferredRepetition)
         XCTAssertEqual(last.repetitionNumber, 4)
+        let picture = try XCTUnwrap(builder.notationPNGRequests(for: package).first {
+            $0.takeID == binding.capturedTakeID
+        })
+        XCTAssertEqual(picture.repetitions, document.recordedRepetitions,
+            "The exported picture must use the validated saved bounds, including edited media timing")
+        XCTAssertEqual(package.referenceReviewMetadataByTakeID[binding.capturedTakeID], data)
 
         func rebuilt(preferred: ReferenceReviewMetadataDocument.Repetition?,
             source: ReferenceTearEvidenceSourceBinding? = nil) -> ReferenceReviewMetadataDocument {

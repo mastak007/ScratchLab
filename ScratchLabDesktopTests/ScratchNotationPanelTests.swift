@@ -2399,16 +2399,118 @@ final class ReferenceNotationPNGTests: XCTestCase {
                 direction: "forward", movementKind: .normalPush, speed: 1, confidence: 1, source: "test")
         ])
         let r = try request(projection: projection)
-        XCTAssertEqual(r.pageRanges, [[0...4, 4...8, 8...12, 12...16], [16...20, 20...22.469]])
+        XCTAssertEqual(r.pageRanges, [[0...4, 4...8], [8...12, 12...16], [16...20, 20...22.469]])
         XCTAssertEqual(r.projection, projection)
         for range in r.pageRanges.flatMap({ $0 }) {
             let frame = try XCTUnwrap(r.frame(for: range))
             XCTAssertEqual(frame.timeRange, range)
-            XCTAssertEqual(frame.positionRange, r.frame(for: 0...4)?.positionRange)
+            XCTAssertEqual(frame.coordinateSpace, projection.coordinateSpace)
         }
         XCTAssertThrowsError(try request(duration: .infinity))
         XCTAssertThrowsError(try request(duration: 0))
         XCTAssertThrowsError(try request(duration: 3601))
+    }
+
+    func testExportRowsEnlargeSmallPhysicalTravelAndRejectLegacyPreviewIdentity() throws {
+        typealias Record = ScratchNotation.GestureRecord
+        let evidence = Record.Evidence(provenance: .measured,
+            observation: .init(source: .platterTimeline, confidence: 1, reason: "export scale fixture"))
+        let curve = Record(id: "export-stroke", direction: .forward, timingDomain: .seconds,
+            coordinateSpace: .normalizedTakeLocalDisplacement, evidence: evidence,
+            subdivisions: [.init(id: "export-curve", span: .init(startTime: 0, endTime: 1), evidence: evidence,
+                measuredCurve: .init(points: [.init(time: 0, position: 0), .init(time: 0.8, position: 0.005),
+                    .init(time: 1, position: 0.02)], evidence: evidence))])
+        let projection = ReferenceTearCanonicalProjection(records: [curve], timeRange: 0...10,
+            positionRange: 0...1, coordinateSpace: .normalizedTakeLocalDisplacement, reasons: [])
+        let r = try request(duration: 10, projection: projection)
+        XCTAssertEqual(r.pageRanges, [[0...4, 4...8], [8...10]], "Make room for readable physical lanes")
+        let frame = try XCTUnwrap(r.frame(for: 0...4))
+        XCTAssertEqual(frame.positionRange.lowerBound, -0.0025, accuracy: 1e-12)
+        XCTAssertEqual(frame.positionRange.upperBound, 0.0225, accuracy: 1e-12)
+        XCTAssertEqual(frame.coordinateSpace, .normalizedTakeLocalDisplacement)
+        let chart = ScratchStrokeGeometry.canonicalGeometry(records: projection.records, layer: .performance, frame: frame)
+        XCTAssertEqual(Double(chart.motion.position(at: 0.8)), 0.3, accuracy: 1e-10)
+        XCTAssertEqual(Double(chart.motion.position(at: 1)), 0.9, accuracy: 1e-10)
+        XCTAssertEqual(r.projection, projection)
+        XCTAssertNotEqual(try r.identity, try ExportSemanticIdentity.digest(r),
+            "Older pictures at identical source coordinates must not be reused with the new layout")
+    }
+
+    func testSavedRepetitionEdgesRetainMediaTimesAcrossRowSeamsAndPreviewIdentity() throws {
+        let repetitions: [ReferenceReviewMetadataDocument.Repetition] = [
+            .init(repetitionIndex: 0, repetitionNumber: 1, startBeat: 4, endBeat: 12,
+                startSeconds: 1.25, endSeconds: 4),
+            .init(repetitionIndex: 1, repetitionNumber: 2, startBeat: 12, endBeat: 20,
+                startSeconds: 4, endSeconds: 9.5),
+            .init(repetitionIndex: 2, repetitionNumber: 3, startBeat: 20, endBeat: 28,
+                startSeconds: nil, endSeconds: nil)]
+        let r = try ReferenceNotationPNGExport.Request(performer: "DJ", sessionID: "session",
+            takeID: "take", takeNumber: 1, scratchType: "Baby", bpm: 95, duration: 10,
+            showBeatGrid: false, projection: nil, sourceIdentity: "fixture", repetitions: repetitions)
+        XCTAssertEqual(r.repetitionEdges(in: 0...4).map(\.time), [1.25, 4, 4])
+        XCTAssertEqual(r.repetitionEdges(in: 4...8).map(\.time), [4, 4])
+        XCTAssertEqual(r.repetitionEdges(in: 8...10).map(\.time), [9.5])
+        XCTAssertEqual(r.repetitionEdges(in: 0...4).map(\.isStart), [true, false, true])
+        XCTAssertEqual(r.repetitions, repetitions, "Never turn missing timing into a plausible zero boundary")
+        XCTAssertNotEqual(try r.identity, try request(duration: 10).identity)
+    }
+
+    func testSaved80And95ExportMatchesPhysicalReviewAtIdenticalBounds() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let directory = environment["SL_EXPORT_RENDER_DIRECTORY"],
+              let path80 = environment["SL_EXPORT_80_DRAFT_PATH"],
+              let path95 = environment["SL_CENTRED_REVIEW_DRAFT_PATH"] else {
+            throw XCTSkip("Supply existing saved 80/95 BPM drafts for export comparison.")
+        }
+        struct Envelope: Decodable { let payload: Data; let sha256: String }
+        for (bpm, path) in [(80, path80), (95, path95)] {
+            let bytes = try Data(contentsOf: URL(fileURLWithPath: path))
+            let envelope = try JSONDecoder().decode(Envelope.self, from: bytes)
+            XCTAssertEqual(ReferencePackageIO.sha256Hex(envelope.payload), envelope.sha256)
+            let draft = try JSONDecoder().decode(ReferenceSavedDraft.self, from: envelope.payload)
+            XCTAssertEqual(draft.evidence.metadata.bpm, bpm)
+            let projection = draft.projection
+            XCTAssertEqual(projection.records.count, bpm == 80 ? 92 : 77)
+            let duration = try XCTUnwrap(draft.evidence.metadata.witnessedTiming?.measuredWAVDurationSeconds)
+            let repetitions = draft.evidence.boundaries.repetitions.map { boundary in
+                ReferenceReviewMetadataDocument.Repetition(repetitionIndex: boundary.index,
+                    repetitionNumber: boundary.index + 1, startBeat: boundary.startBeat, endBeat: boundary.endBeat,
+                    startSeconds: draft.evidence.metadata.mediaSeconds(forBeat: boundary.startBeat),
+                    endSeconds: draft.evidence.metadata.mediaSeconds(forBeat: boundary.endBeat))
+            }
+            let r = try ReferenceNotationPNGExport.Request(performer: draft.evidence.metadata.performerName,
+                sessionID: draft.evidence.metadata.authoringSessionID, takeID: draft.id, takeNumber: 1,
+                scratchType: "Baby Scratch", bpm: bpm, duration: duration, showBeatGrid: true,
+                projection: projection, sourceIdentity: envelope.sha256,
+                beatTimelineOffsetSeconds: draft.evidence.metadata.mediaTimeOrigin?.recordingStartOffsetSeconds ?? 0,
+                repetitions: repetitions)
+            let full = try XCTUnwrap(ReferenceAuthoringViewModel.canonicalFrame(for: projection, bpm: Double(bpm)))
+            let ranges = r.pageRanges.flatMap { $0 }
+            XCTAssertEqual(ranges.first?.lowerBound, 0)
+            XCTAssertEqual(ranges.last?.upperBound, duration)
+            for (a, b) in zip(ranges, ranges.dropFirst()) { XCTAssertEqual(a.upperBound, b.lowerBound) }
+            for range in ranges {
+                let export = try XCTUnwrap(r.frame(for: range))
+                let review = ReferenceMotionReviewViewport.frame(full, selectedRange: range, zoomed: true,
+                    records: projection.records)
+                XCTAssertEqual(export, review, "Export and physical review must agree at identical time bounds")
+            }
+            let folder = URL(fileURLWithPath: directory)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            var first: Data?
+            for page in r.pageRanges.indices {
+                let png = try ReferenceNotationPNGExport.render(r, page: page)
+                _ = try ReferenceNotationPNGExport.probe(png)
+                if page == 0 { first = png }
+                try png.write(to: folder.appendingPathComponent("\(bpm)bpm-page-\(page + 1).png"))
+            }
+            let repeated = try ReferenceNotationPNGExport.render(r, page: 0)
+            try repeated.write(to: folder.appendingPathComponent("\(bpm)bpm-repeated-page-1.png"))
+            XCTAssertEqual(repeated, first,
+                "Repeat rendering of the same saved input must be deterministic")
+            XCTAssertEqual(r.projection, projection)
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), bytes)
+        }
     }
 
     func testTimedRowsKeepWholeBarsAndPartialTailScale() throws {
@@ -2434,7 +2536,7 @@ final class ReferenceNotationPNGTests: XCTestCase {
             let long = try ReferenceNotationPNGExport.Request(performer: "DJ", sessionID: "session",
                 takeID: "take", takeNumber: 1, scratchType: "Baby", bpm: bpm, duration: 3600,
                 showBeatGrid: true, projection: nil, sourceIdentity: "fixture", beatsPerBar: 3)
-            XCTAssertLessThanOrEqual(long.pageRanges.count, 225)
+            XCTAssertLessThanOrEqual(long.pageRanges.count, 450)
             let bars = long.rowDuration / (180 / Double(bpm))
             XCTAssertEqual(bars, bars.rounded(), accuracy: 1e-9)
         }

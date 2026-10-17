@@ -6463,6 +6463,7 @@ struct SessionArchiveBuilder: Sendable {
 
     private func notationPNGRequest(for context: CanonicalTakeContext, metadata: SessionExportMetadata) throws -> ReferenceNotationPNGExport.Request {
         let evidence = try context.referenceTearEvidence.map { try ReferenceTearEvidenceCodec.decodeDocument($0.data) }
+        let review = try context.referenceReviewMetadata.map { try ReferenceReviewMetadataCodec.decodeDocument($0.data) }
         return try ReferenceNotationPNGExport.Request(
             performer: metadata.performerName ?? "Performer not recorded",
             sessionID: context.sidecar.sessionID, takeID: context.take.takeID,
@@ -6473,7 +6474,8 @@ struct SessionArchiveBuilder: Sendable {
             sourceIdentity: ExportArtifactIdentity.data(context.referenceTearEvidence?.data ?? Data()).sha256
                 + ":" + (try ExportSemanticIdentity.digest(context.sidecar)),
             beatsPerBar: context.sidecar.sessionConfig?.beatsPerBar ?? metadata.beatsPerBar,
-            beatTimelineOffsetSeconds: context.sidecar.captureTiming?.recordingStartOffsetSeconds ?? 0)
+            beatTimelineOffsetSeconds: context.sidecar.captureTiming?.recordingStartOffsetSeconds ?? 0,
+            repetitions: review?.recordedRepetitions ?? [])
     }
 
     private func manifestAllowedBPMs(
