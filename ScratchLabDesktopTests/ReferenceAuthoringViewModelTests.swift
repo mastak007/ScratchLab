@@ -5442,6 +5442,56 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
         XCTAssertEqual(returnSpeed / forwardSpeed, 5, accuracy: 1e-10)
     }
 
+    func testOpeningPhysicalPinUsesSelectionAndNeverSampleHistoryOrPlayerTime() throws {
+        let frame = try XCTUnwrap(ScratchStrokeGeometry.CanonicalFrame(timeRange: 0...27,
+            positionRange: 0...1, coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 80))
+        var source = ReferenceMotionDetailPages.Request(records: [], fullFrame: frame,
+            mixerFaders: nil, samplePlayback: nil, showBeatGrid: true, beatOffset: 0, selectedRange: 8...14)
+        let initial = try XCTUnwrap(ReferenceMotionDetailPages.InspectionRequest.initial(takeID: "a", source: source))
+        XCTAssertEqual(initial.range, 8...10)
+        XCTAssertTrue(initial.matches(takeID: "a", source: source))
+        XCTAssertFalse(initial.matches(takeID: "b", source: source))
+        source.selectedRange = 25.5...27
+        XCTAssertFalse(initial.matches(takeID: "a", source: source))
+        XCTAssertEqual(ReferenceMotionDetailPages.InspectionRequest.initial(takeID: "a", source: source)?.range, 25...27)
+        source.selectedRange = 30...35
+        XCTAssertNil(ReferenceMotionDetailPages.InspectionRequest.initial(takeID: "a", source: source))
+        source.selectedRange = 0...8
+        for display in [ReferenceMotionDetailPages.Display.movementDetail, .samplePosition] {
+            source.display = display
+            XCTAssertNil(ReferenceMotionDetailPages.InspectionRequest.initial(takeID: "a", source: source),
+                         "A physical opening pin must never silently be a sample-phase or emphasized view")
+        }
+    }
+
+    func testPhysicalPanelsKeepWholeRepetitionPrimaryAndStackWithoutClipping() throws {
+        for width in [1200, 960, 959, 700] {
+            for label in ["At playhead", "Recorded platter: backward · duration 0.15 s"] {
+                let renderer = ImageRenderer(content: ReferenceMotionReviewPanels {
+                    Color.red.overlay(alignment: .topLeading) { Text(label).font(.caption) }.frame(height: 400)
+                    Color.blue.frame(height: 400)
+                }.frame(width: CGFloat(width)).background(Color.black))
+                renderer.scale = 1; renderer.isOpaque = true
+                let image = try XCTUnwrap(renderer.cgImage)
+                XCTAssertEqual(image.width, width)
+                XCTAssertEqual(image.height, width >= 960 ? 400 : 812,
+                    "Clock text must never change layout; narrow panels must retain both full heights")
+                let bitmap = NSBitmapImageRep(cgImage: image)
+                if width >= 960 {
+                    let main = try XCTUnwrap(bitmap.colorAt(x: width / 2, y: 200)?.usingColorSpace(.deviceRGB))
+                    let detail = try XCTUnwrap(bitmap.colorAt(x: width - 20, y: 200)?.usingColorSpace(.deviceRGB))
+                    XCTAssertGreaterThan(main.redComponent, 0.9, "The complete repetition keeps the majority of width")
+                    XCTAssertGreaterThan(detail.blueComponent, 0.9)
+                } else {
+                    let main = try XCTUnwrap(bitmap.colorAt(x: width / 2, y: 200)?.usingColorSpace(.deviceRGB))
+                    let detail = try XCTUnwrap(bitmap.colorAt(x: width / 2, y: 612)?.usingColorSpace(.deviceRGB))
+                    XCTAssertGreaterThan(main.redComponent, 0.9)
+                    XCTAssertGreaterThan(detail.blueComponent, 0.9)
+                }
+            }
+        }
+    }
+
     func testPinnedInspectionKeepsMainRangeAndUsesOneScale() throws {
         let records = [motion(id: "slow-forward", time: 0.1...0.7, start: 0, end: 0.2),
                        motion(id: "fast-return", time: 0.7...0.85, start: 0.2, end: -0.05),
@@ -5701,6 +5751,38 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
                     $0.startTime < 0.335411 && $0.endTime > 0.335411 && $0.endPosition < $0.startPosition
                 }, "The recorded pullback must remain continuous across the backwards sample-seam crossing")
             }
+            let pin = try XCTUnwrap(ReferenceMotionDetailPages.InspectionRequest.initial(
+                takeID: document.referenceTakeID, source: request))
+            XCTAssertTrue(pin.matches(takeID: document.referenceTakeID, source: request))
+            if index == 0 || index == 3 {
+                let closeUp = try XCTUnwrap(ReferenceMotionDetailPages.prepareInspection(pin))
+                XCTAssertLessThanOrEqual(pin.range.upperBound - pin.range.lowerBound, 2)
+                XCTAssertLessThan(closeUp.chart.frame.positionRange.upperBound - closeUp.chart.frame.positionRange.lowerBound,
+                                  page.chart.frame.positionRange.upperBound - page.chart.frame.positionRange.lowerBound,
+                                  "The separate affine pin must enlarge small physical strokes without altering the full repetition")
+                if index == 0 {
+                    let forward = try XCTUnwrap(projection.records[0].subdivisions.first?.measuredCurve)
+                    let backward = try XCTUnwrap(projection.records[1].subdivisions.first?.measuredCurve)
+                    let first = try XCTUnwrap(travel.movements.at((forward.points.first!.time + forward.points.last!.time) / 2))
+                    let second = try XCTUnwrap(travel.movements.at((backward.points.first!.time + backward.points.last!.time) / 2))
+                    XCTAssertEqual(first.span.duration, 0.126662, accuracy: 0.000002)
+                    XCTAssertEqual(second.span.duration, 0.150855, accuracy: 0.000002)
+                    XCTAssertEqual(try XCTUnwrap(second.meanRatio), 0.9763, accuracy: 0.0001)
+                    // Readout samples 40 ms windows starting at measured vertices.
+                    // Independent interpolation gives this ratio; the earlier
+                    // all-window audit (also testing vertex-minus-40ms starts)
+                    // gives 1.094378441757511 and is a different estimator.
+                    XCTAssertEqual(try XCTUnwrap(second.peakRatio), 1.0945364027967632, accuracy: 1e-10)
+                    for point in forward.points + backward.points {
+                        let frame = closeUp.chart.frame
+                        XCTAssertEqual(Double(closeUp.chart.geometry.motion.position(at: point.time)),
+                            (point.position - frame.positionRange.lowerBound) / (frame.positionRange.upperBound - frame.positionRange.lowerBound),
+                            accuracy: 1e-9, "Keep every measured vertex on one affine scale; no invented fast pullback")
+                    }
+                }
+                try renderPhysicalPanels(main: page.chart, closeUp: closeUp.chart,
+                    bpm: 80, offset: request.beatOffset, name: "80bpm-depth-repetition-\(index + 1)")
+            }
             // Exercise every physical viewport once. The synthetic test above
             // separately proves history/no-history identity; rebuilding the
             // same dense whole-take overview for that equality adds no coverage.
@@ -5745,6 +5827,30 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
             }
         }
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), original)
+    }
+
+    private func renderPhysicalPanels(main: ScratchStrokeGeometry.PreparedCanonicalChart,
+                                      closeUp: ScratchStrokeGeometry.PreparedCanonicalChart,
+                                      bpm: Double, offset: Double, name: String) throws {
+        guard let directory = ProcessInfo.processInfo.environment["SL_REVIEW_PLAYHEAD_RENDER_DIRECTORY"] else { return }
+        for width in [1200, 700] {
+            let renderer = ImageRenderer(content: ReferenceMotionReviewPanels {
+                ScratchPhraseChartView(source: .preparedCanonical(main), bpm: bpm,
+                    beatTimelineOffsetSeconds: offset, showsMixerFaderLanes: true,
+                    reviewDetail: true, backgroundColor: .black).frame(height: 400)
+                ScratchPhraseChartView(source: .preparedCanonical(closeUp), bpm: bpm,
+                    beatTimelineOffsetSeconds: offset, showsMixerFaderLanes: true,
+                    reviewDetail: true, backgroundColor: .black).frame(height: 400)
+            }.frame(width: CGFloat(width)).background(Color.black).environment(\.colorScheme, .dark))
+            renderer.scale = 1; renderer.isOpaque = true
+            let image = try XCTUnwrap(renderer.cgImage)
+            XCTAssertEqual(image.width, width)
+            XCTAssertEqual(image.height, width >= 960 ? 400 : 812)
+            let url = URL(fileURLWithPath: directory, isDirectory: true)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            let png = try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+            try png.write(to: url.appendingPathComponent("\(name)-\(width).png"), options: .atomic)
+        }
     }
 
     func testBeatlessDetailShowsWholeShortRecordingAndUsesEightSecondsForLongRecording() throws {
@@ -5845,6 +5951,9 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
         }
         XCTAssertEqual(main.chart.frame.timeRange, 0...8)
         XCTAssertEqual(inspection.chart.frame.timeRange, 0...2)
+        XCTAssertEqual(ReferenceMotionDetailPages.InspectionRequest.initial(takeID: draft.id, source: source)?.range, 0...2)
+        try renderPhysicalPanels(main: main.chart, closeUp: inspection.chart, bpm: 95,
+            offset: source.beatOffset, name: "95bpm-depth-first-pair")
         let renderer = ImageRenderer(content:
             VStack(alignment: .leading, spacing: 8) {
                 Text("SAVED 95 BPM TAKE · RECORDED TRAVEL CLOSE-UP").font(.headline)

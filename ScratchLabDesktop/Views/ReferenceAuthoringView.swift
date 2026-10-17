@@ -2947,6 +2947,19 @@ struct ReferenceMotionDetailPages: Equatable, Sendable {
             self.source = source
         }
 
+        /// A deterministic opening pin: the start of the selected physical
+        /// repetition, never the moving player clock. Short/tail recordings
+        /// reuse the same bounded inspection framing as an explicit pin.
+        static func initial(takeID: String, source: Request) -> Self? {
+            guard source.display == .recordedTravel else { return nil }
+            let available = source.fullFrame.timeRange
+            let selected = source.selectedRange ?? available
+            let start = max(available.lowerBound, selected.lowerBound)
+            let end = min(available.upperBound, selected.upperBound)
+            guard start.isFinite, end.isFinite, end > start else { return nil }
+            return Self(takeID: takeID, mediaTime: start + min(1, (end - start) / 2), source: source)
+        }
+
         func matches(takeID: String, source: Request) -> Bool {
             self.takeID == takeID && self.source == source
         }
@@ -3009,6 +3022,41 @@ struct ReferenceMotionDetailPages: Equatable, Sendable {
     func pageIndex(at time: Double) -> Int { 0 }
 }
 
+/// Keep the complete repetition primary; a separately scaled physical pin
+/// makes small strokes readable without changing the main trace. Layout only
+/// depends on available width, never on playback text or observed motion.
+struct ReferenceMotionReviewPanels: Layout {
+    private let spacing: CGFloat = 12
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = max(0, proposal.width ?? 960)
+        guard subviews.count == 2 else {
+            return CGSize(width: width, height: subviews.first?.sizeThatFits(.init(width: width, height: nil)).height ?? 0)
+        }
+        if width >= 960 {
+            let mainWidth = (width - spacing) * 0.66
+            let main = subviews[0].sizeThatFits(.init(width: mainWidth, height: nil))
+            let detail = subviews[1].sizeThatFits(.init(width: width - spacing - mainWidth, height: nil))
+            return CGSize(width: width, height: max(main.height, detail.height))
+        }
+        return CGSize(width: width, height: subviews.reduce(spacing) {
+            $0 + $1.sizeThatFits(.init(width: width, height: nil)).height
+        })
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let sideBySide = subviews.count == 2 && bounds.width >= 960
+        let mainWidth = sideBySide ? (bounds.width - spacing) * 0.66 : bounds.width
+        var origin = bounds.origin
+        for (index, view) in subviews.enumerated() {
+            let width = sideBySide && index == 1 ? bounds.width - spacing - mainWidth : mainWidth
+            let size = view.sizeThatFits(.init(width: width, height: nil))
+            view.place(at: origin, anchor: .topLeading, proposal: .init(width: width, height: size.height))
+            if sideBySide { origin.x += width + spacing } else { origin.y += size.height + spacing }
+        }
+    }
+}
+
 private struct ReferenceMotionDetailView: View {
     @ObservedObject var controller: ReferenceFinalizedMediaReviewController
     let takeID: String
@@ -3022,12 +3070,16 @@ private struct ReferenceMotionDetailView: View {
     @State private var preparedTakeID: String?
     @State private var preparedRequest: ReferenceMotionDetailPages.Request?
     @State private var inspectionRequest: ReferenceMotionDetailPages.InspectionRequest?
+    @State private var hidesInspection = false
     @State private var preparedInspectionRequest: ReferenceMotionDetailPages.InspectionRequest?
     @State private var preparedInspection: ReferenceMotionDetailPages.Page?
 
     private var currentInspection: ReferenceMotionDetailPages.InspectionRequest? {
-        guard let inspectionRequest, inspectionRequest.matches(takeID: takeID, source: request) else { return nil }
-        return inspectionRequest
+        guard !hidesInspection else { return nil }
+        if let inspectionRequest, inspectionRequest.matches(takeID: takeID, source: request) {
+            return inspectionRequest
+        }
+        return .initial(takeID: takeID, source: request)
     }
 
     var body: some View {
@@ -3044,38 +3096,22 @@ private struct ReferenceMotionDetailView: View {
                             let time = controller.currentPlaybackTime(for: takeID)
                             controller.stop()
                             inspectionRequest = .init(takeID: takeID, mediaTime: time, source: request)
+                            hidesInspection = false
                         }
                         .disabled(controller.currentPlaybackTime(for: takeID) == nil)
                         if currentInspection != nil {
-                            Button("Hide close-up") { inspectionRequest = nil }
+                            Button("Hide close-up") { hidesInspection = true; inspectionRequest = nil }
                         }
                     }
                     .font(.caption)
                     .frame(height: 24)
-                    ScratchPhraseChartView(source: .preparedCanonical(page.chart),
-                        bpm: request.fullFrame.beatsPerMinute, showBeatGrid: request.showBeatGrid,
-                        beatTimelineOffsetSeconds: request.beatOffset,
-                        showsMixerFaderLanes: true, reviewDetail: true,
-                        sampleResetMarkers: page.resets, samplePosition: prepared.usesSamplePosition,
-                        backgroundColor: .clear)
-                        .frame(height: height)
-                        .clipped()
-                        .overlay {
-                            if let selected = request.selectedRange,
-                               let fractions = ReferenceMotionReviewViewport.visibleFractions(
-                                selected, in: page.chart.frame.timeRange),
-                               fractions.lowerBound > 0 || fractions.upperBound < 1 {
-                                // Keep the extra eight-second context readable
-                                // while marking the actual repetition bounds.
-                                ReferenceMotionSelectionOverlay(selectedRange: selected,
-                                    viewport: page.chart.frame.timeRange)
-                                    .allowsHitTesting(false)
-                            }
+                    ReferenceMotionReviewPanels {
+                        repetitionChart(page, usesSamplePosition: prepared.usesSamplePosition)
+                        if let inspection = currentInspection {
+                            inspectionChart(inspection)
+                                .frame(height: height)
                         }
-                        .overlay {
-                            ReferenceReviewPlaybackOverlay(controller: controller,
-                                takeID: takeID, viewport: page.chart.frame.timeRange)
-                        }
+                    }
                     ReferenceReviewMovementReadout(controller: controller, takeID: takeID,
                         movements: prepared.movements, usesSamplePosition: prepared.usesSamplePosition)
                     Text(page.isMovementDetail
@@ -3084,7 +3120,7 @@ private struct ReferenceMotionDetailView: View {
                             ? "Movement detail is unavailable for this evidence; recorded travel is shown."
                             : (prepared.usesSamplePosition
                                 ? "Software sample phase · 0% start / 100% end. Wrap breaks are sample boundaries, not platter returns."
-                                : "Recorded travel · one shared scale: gentler slopes mean slower movement; steeper slopes mean faster movement.")))
+                                : "Recorded travel · one linear scale fitted to this window, fixed during playback. Steeper slopes mean faster movement within this panel.")))
                         .font(.caption2).foregroundStyle(.secondary)
                         .frame(height: 28, alignment: .topLeading)
                     Text(prepared.usesSamplePosition
@@ -3131,14 +3167,20 @@ private struct ReferenceMotionDetailView: View {
                             ReferenceReviewPlaybackOverlay(controller: controller,
                                 takeID: takeID, viewport: request.fullFrame.timeRange)
                         }
-                    if let inspection = currentInspection {
-                        inspectionChart(inspection)
-                    }
                 }
             } else {
-                Text("Preparing repetition notation…")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity).frame(height: height + 284)
+                // Reserve the exact loaded layout while geometry prepares,
+                // including the stacked pin on narrow windows.
+                VStack(spacing: 6) {
+                    Text("Preparing repetition notation…")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity).frame(height: 24)
+                    ReferenceMotionReviewPanels {
+                        Color.clear.frame(height: height)
+                        if currentInspection != nil { Color.clear.frame(height: height) }
+                    }
+                    Color.clear.frame(height: 248)
+                }
             }
         }
         .task(id: request) {
@@ -3153,6 +3195,7 @@ private struct ReferenceMotionDetailView: View {
             prepared = result
         }
         .onChange(of: request) { _, source in
+            hidesInspection = false
             // Discard the pin, rather than merely hiding it: returning to a
             // previous display mode or boundary must not resurrect old focus.
             if let inspectionRequest, !inspectionRequest.matches(takeID: takeID, source: source) {
@@ -3176,13 +3219,42 @@ private struct ReferenceMotionDetailView: View {
         }
     }
 
+    private func repetitionChart(_ page: ReferenceMotionDetailPages.Page,
+                                 usesSamplePosition: Bool) -> some View {
+        ScratchPhraseChartView(source: .preparedCanonical(page.chart),
+            bpm: request.fullFrame.beatsPerMinute, showBeatGrid: request.showBeatGrid,
+            beatTimelineOffsetSeconds: request.beatOffset,
+            showsMixerFaderLanes: true, reviewDetail: true,
+            sampleResetMarkers: page.resets, samplePosition: usesSamplePosition,
+            backgroundColor: .clear)
+            .frame(height: height)
+            .clipped()
+            .overlay {
+                if let selected = request.selectedRange,
+                   let fractions = ReferenceMotionReviewViewport.visibleFractions(
+                    selected, in: page.chart.frame.timeRange),
+                   fractions.lowerBound > 0 || fractions.upperBound < 1 {
+                    // Keep the extra eight-second context readable
+                    // while marking the actual repetition bounds.
+                    ReferenceMotionSelectionOverlay(selectedRange: selected,
+                        viewport: page.chart.frame.timeRange)
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay {
+                ReferenceReviewPlaybackOverlay(controller: controller,
+                    takeID: takeID, viewport: page.chart.frame.timeRange)
+            }
+    }
+
     private func inspectionChart(_ inspection: ReferenceMotionDetailPages.InspectionRequest) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("RECORDED TRAVEL CLOSE-UP · \(inspection.range.lowerBound, specifier: "%.2f")–\(inspection.range.upperBound, specifier: "%.2f") s")
+            Text("PINNED CLOSE-UP · \(inspection.range.lowerBound, specifier: "%.2f")–\(inspection.range.upperBound, specifier: "%.2f") s")
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
-            Text("Pinned view · one shared height scale. Gentler slopes are slower; steeper slopes are faster.")
+            Text("Separate linear scale · compare slopes within each panel, not across panels or repetitions. Inspect at playhead moves this pin.")
                 .font(.caption2).foregroundStyle(.secondary)
+                .frame(height: 42, alignment: .topLeading)
             Group {
                 if preparedInspectionRequest == inspection, let page = preparedInspection {
                     ScratchPhraseChartView(source: .preparedCanonical(page.chart),
@@ -3199,10 +3271,12 @@ private struct ReferenceMotionDetailView: View {
                         .frame(maxWidth: .infinity)
                 }
             }
-            .frame(height: 240)
+            .frame(maxHeight: .infinity)
             .clipped()
         }
-        .padding(.top, 6)
+        .padding(8)
+        .background(Color.primary.opacity(0.025))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.35)))
     }
 }
 
