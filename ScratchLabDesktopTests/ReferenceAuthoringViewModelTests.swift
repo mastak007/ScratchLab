@@ -5391,7 +5391,7 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
             positionRange: 0...9, coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 120))
         let request = ReferenceMotionDetailPages.Request(records: records, fullFrame: full,
             mixerFaders: nil, samplePlayback: nil, showBeatGrid: true, beatOffset: 0, selectedRange: 0...1,
-            enhancesMovement: false)
+            display: .recordedTravel)
         let detail = ReferenceMotionDetailPages.prepare(request)
         XCTAssertEqual(detail.pages.count, 1)
         XCTAssertEqual(detail.pages[0].chart.frame.timeRange, 0...8)
@@ -5423,7 +5423,7 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
             positionRange: -1...5, coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 95))
         let request = ReferenceMotionDetailPages.Request(records: records, fullFrame: frame,
             mixerFaders: nil, samplePlayback: nil, showBeatGrid: true, beatOffset: 0, selectedRange: 0...8)
-        XCTAssertFalse(request.enhancesMovement)
+        XCTAssertEqual(request.display, .recordedTravel)
         let page = try XCTUnwrap(ReferenceMotionDetailPages.prepare(request).pages.first)
         XCTAssertFalse(page.isMovementDetail)
         XCTAssertEqual(page.chart.frame.timeRange, 0...8)
@@ -5445,7 +5445,7 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
         var source = ReferenceMotionDetailPages.Request(records: records, fullFrame: frame,
             mixerFaders: nil, samplePlayback: nil, showBeatGrid: true, beatOffset: 0, selectedRange: 0...1)
         // Inspection retains recorded geometry even if optional emphasis is on.
-        source.enhancesMovement = true
+        source.display = .movementDetail
         let main = ReferenceMotionDetailPages.prepare(source)
         let pinned = try XCTUnwrap(ReferenceMotionDetailPages.InspectionRequest(
             takeID: "take-a", mediaTime: 0.4, source: source))
@@ -5531,9 +5531,9 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
             positionRange: 0...21, coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 95))
         var request = ReferenceMotionDetailPages.Request(records: records, fullFrame: full,
             mixerFaders: nil, samplePlayback: nil, showBeatGrid: true, beatOffset: 2.4,
-            selectedRange: 0...8, enhancesMovement: true)
+            selectedRange: 0...8, display: .movementDetail)
         let detail = ReferenceMotionDetailPages.prepare(request)
-        request.enhancesMovement = false
+        request.display = .recordedTravel
         let travel = ReferenceMotionDetailPages.prepare(request)
         let enhanced = try XCTUnwrap(detail.pages.first)
         let recorded = try XCTUnwrap(travel.pages.first)
@@ -5595,7 +5595,7 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
             duration: 2, overflowed: false, observations: observations)
         let detail = ReferenceMotionDetailPages.prepare(.init(records: records, fullFrame: frame,
             mixerFaders: nil, samplePlayback: timeline, showBeatGrid: true, beatOffset: 0,
-            enhancesMovement: false))
+            display: .samplePosition))
         XCTAssertTrue(detail.usesSamplePosition)
         XCTAssertEqual(detail.pages.count, 1)
         XCTAssertEqual(detail.pages[0].chart.frame.timeRange, 0...2, "Short recordings retain their whole available duration")
@@ -5606,17 +5606,38 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
         XCTAssertEqual(restartedSegment.startPosition, 0.5)
         XCTAssertFalse(detail.pages[0].chart.geometry.motion.segments.contains { $0.startTime < 1 && $0.endTime > 1 },
                        "A recorded loop must not draw a fabricated return stroke")
-        let enhanced = ReferenceMotionDetailPages.prepare(.init(records: records, fullFrame: frame,
+        let travel = ReferenceMotionDetailPages.prepare(.init(records: records, fullFrame: frame,
+            mixerFaders: nil, samplePlayback: timeline, showBeatGrid: true, beatOffset: 0))
+        let withoutHistory = ReferenceMotionDetailPages.prepare(.init(records: records, fullFrame: frame,
+            mixerFaders: nil, samplePlayback: nil, showBeatGrid: true, beatOffset: 0))
+        XCTAssertEqual(travel, withoutHistory,
+            "The presence of sample history cannot replace Recorded travel or suppress its physical readout")
+        XCTAssertFalse(travel.usesSamplePosition)
+        XCTAssertTrue(try XCTUnwrap(travel.pages.first).resets.isEmpty)
+        XCTAssertEqual(travel.pages.first?.chart.frame.coordinateSpace, frame.coordinateSpace)
+        let movement = ReferenceMotionDetailPages.prepare(.init(records: records, fullFrame: frame,
             mixerFaders: nil, samplePlayback: timeline, showBeatGrid: true, beatOffset: 0,
-            enhancesMovement: true))
-        let enhancedPage = try XCTUnwrap(enhanced.pages.first)
-        XCTAssertTrue(enhancedPage.isMovementDetail)
-        XCTAssertTrue(enhanced.usesSamplePosition)
-        XCTAssertEqual(enhanced.overview, detail.overview)
-        XCTAssertEqual(enhancedPage.resets, detail.pages[0].resets)
-        XCTAssertEqual(enhancedPage.chart.geometry.missingMotion, detail.pages[0].chart.geometry.missingMotion)
-        XCTAssertEqual(try XCTUnwrap(enhancedPage.chart.geometry.motion.segments.first { $0.startTime == 1 }).startPosition, 0.5,
-            "Movement detail must keep actual recorded restarts centred")
+            display: .movementDetail))
+        XCTAssertTrue(try XCTUnwrap(movement.pages.first).isMovementDetail)
+        XCTAssertFalse(movement.usesSamplePosition,
+            "Movement emphasis must never apply independently to sample-seam fragments")
+        XCTAssertTrue(try XCTUnwrap(movement.pages.first).resets.isEmpty)
+        XCTAssertEqual(movement.movements, travel.movements)
+        XCTAssertFalse(try XCTUnwrap(detail.pages.first).isMovementDetail,
+            "Sample position and nonlinear movement emphasis are mutually exclusive")
+        var sampleRequest = ReferenceMotionDetailPages.Request(records: records, fullFrame: frame,
+            mixerFaders: nil, samplePlayback: timeline, showBeatGrid: true, beatOffset: 0,
+            display: .samplePosition)
+        let pin = try XCTUnwrap(ReferenceMotionDetailPages.InspectionRequest(
+            takeID: "fixture", mediaTime: 1, source: sampleRequest))
+        sampleRequest.display = .recordedTravel
+        XCTAssertFalse(pin.matches(takeID: "fixture", source: sampleRequest),
+            "Changing the representation invalidates a previously prepared inspection")
+        let unavailable = ReferenceMotionDetailPages.prepare(.init(records: records, fullFrame: frame,
+            mixerFaders: nil, samplePlayback: nil, showBeatGrid: true, beatOffset: 0,
+            display: .samplePosition))
+        XCTAssertEqual(unavailable, withoutHistory,
+            "Unavailable sample position falls back to unchanged measured travel")
         let renderer = ImageRenderer(content:
             VStack(alignment: .leading, spacing: 8) {
                 Text("SYNTHETIC LOOP PRESENTATION TEST · NOT A RECORDED TAKE").font(.headline)
@@ -5637,6 +5658,87 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
             let png = try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
             try png.write(to: url.appendingPathComponent("synthetic-centred-loop.png"), options: .atomic)
         }
+    }
+
+    func testSupplied80BPMRecordedTravelIgnoresSampleSeamsAndPreservesPhysicalReadout() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let path = environment["SL_80BPM_REVIEW_EVIDENCE_PATH"] else {
+            throw XCTSkip("Supply the 17 October 80 BPM capture with repeated sample-seam crossings.")
+        }
+        let original = try Data(contentsOf: URL(fileURLWithPath: path))
+        let document = try ReferenceTearEvidenceCodec.decodeDocument(original)
+        XCTAssertEqual(document.referenceTakeID,
+            "reference-7d635021-321d-42a3-9761-1ad342d0a784-take-001")
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self,
+            from: document.sourceBinding.rawSidecarData)
+        let timeline = try XCTUnwrap(sidecar.samplePlayback)
+        XCTAssertEqual(timeline.observations.filter { $0.kind == .loop }.count, 70)
+        let projection = document.projection
+        XCTAssertEqual(projection.records.count, 92)
+        let full = try XCTUnwrap(ReferenceAuthoringViewModel.canonicalFrame(for: projection, bpm: 80))
+        let ranges = [0.0...2.751542389, 8.189042389...11.376542389,
+                      12.126542389...18.126542389, 20.939042389...27.126542389]
+        for (index, range) in ranges.enumerated() {
+            var request = ReferenceMotionDetailPages.Request(records: projection.records, fullFrame: full,
+                mixerFaders: projection.mixerFaders, samplePlayback: timeline, showBeatGrid: true,
+                beatOffset: sidecar.captureTiming?.recordingStartOffsetSeconds ?? 0, selectedRange: range)
+            let travel = ReferenceMotionDetailPages.prepare(request)
+            XCTAssertFalse(travel.usesSamplePosition)
+            let page = try XCTUnwrap(travel.pages.first)
+            XCTAssertTrue(page.resets.isEmpty)
+            XCTAssertEqual(page.chart.frame.coordinateSpace, full.coordinateSpace)
+            XCTAssertGreaterThanOrEqual(page.chart.frame.timeRange.upperBound - page.chart.frame.timeRange.lowerBound, 8)
+            XCTAssertEqual(travel.movements, .init(records: projection.records, coordinateSpace: full.coordinateSpace))
+            if index == 0 {
+                XCTAssertTrue(page.chart.geometry.motion.segments.contains {
+                    $0.startTime < 0.335411 && $0.endTime > 0.335411 && $0.endPosition < $0.startPosition
+                }, "The recorded pullback must remain continuous across the backwards sample-seam crossing")
+            }
+            // Exercise every physical viewport once. The synthetic test above
+            // separately proves history/no-history identity; rebuilding the
+            // same dense whole-take overview for that equality adds no coverage.
+            var renders = [("recorded-travel", travel)]
+            if index == 3 {
+                request.display = .movementDetail
+                let movement = ReferenceMotionDetailPages.prepare(request)
+                let expected = try XCTUnwrap(ScratchStrokeGeometry.movementDetailChart(page.chart))
+                XCTAssertEqual(try XCTUnwrap(movement.pages.first).chart, expected,
+                    "Movement emphasis must operate on complete physical motion, not sample-seam fragments")
+                XCTAssertFalse(movement.usesSamplePosition)
+                XCTAssertTrue(try XCTUnwrap(movement.pages.first).resets.isEmpty)
+                XCTAssertEqual(movement.movements, travel.movements)
+                XCTAssertEqual(movement.overview, travel.overview)
+                renders.append(("movement-detail", movement))
+            }
+            if index == 0 {
+                request.display = .samplePosition
+                let sample = ReferenceMotionDetailPages.prepare(request)
+                XCTAssertTrue(sample.usesSamplePosition)
+                XCTAssertFalse(try XCTUnwrap(sample.pages.first).isMovementDetail)
+                XCTAssertEqual(sample.overview, travel.overview)
+                renders.append(("sample-position", sample))
+            }
+            if let directory = environment["SL_EXPLICIT_DISPLAY_RENDER_DIRECTORY"] {
+                for (name, detail) in renders {
+                    let displayed = try XCTUnwrap(detail.pages.first)
+                    let renderer = ImageRenderer(content: ScratchPhraseChartView(
+                        source: .preparedCanonical(displayed.chart), bpm: 80,
+                        beatTimelineOffsetSeconds: request.beatOffset,
+                        showsMixerFaderLanes: true, reviewDetail: true,
+                        sampleResetMarkers: displayed.resets, samplePosition: detail.usesSamplePosition,
+                        backgroundColor: .black)
+                        .frame(width: 1200, height: 400).environment(\.colorScheme, .dark))
+                    renderer.scale = 1; renderer.isOpaque = true
+                    let image = try XCTUnwrap(renderer.cgImage)
+                    let url = URL(fileURLWithPath: directory, isDirectory: true)
+                    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+                    let png = try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+                    try png.write(to: url.appendingPathComponent("80bpm-repetition-\(index + 1)-\(name).png"), options: .atomic)
+                }
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), original)
     }
 
     func testBeatlessDetailShowsWholeShortRecordingAndUsesEightSecondsForLongRecording() throws {

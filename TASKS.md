@@ -1,3 +1,7 @@
+## Current explicit user task — review representation, 17 October 2026
+
+- [ ] Make Recorded travel the actual physical-motion default when sample history exists; separate sample position from movement emphasis. Verify the supplied 80 BPM seam recrossings and the historical 95 BPM fallback, required gates, signed installation and saved-file preservation. Follow-up sample-phase and export work is ordered in docs/notation_correction_prompts_20261017.md. WIP overnight checkpoint: warm/access and focused8/8 PASS; full gate user-interrupted after3095 passes/24 skips/0 failed assertions. No platform build/install; remain unchecked until completed.
+
 ## Completed explicit user task — review readability, 17 October 2026
 
 - [x] Correct the review-only duplicate vertical inset and arbitrary midpoint guide; retain full repetition/eight-second context and common-scale measured motion. Add a bounded playhead direction/duration/speed readout with honest uncertainty; verify actual saved95 evidence, software/all-platform gates, signed app and installed review. Raw/canonical evidence and physical acceptance remain separate. Exact-source full gates, signed universal installation and sampled live readout/playback/layout checks PASS. All 56 saved files and both clones preserved; see review-readability-resume/RESULT.md. Physical/audio, Intel and operator acceptance remain unconfirmed.

@@ -58,7 +58,7 @@ struct ReferenceAuthoringView: View {
     @State private var expandedTearGroupIDs: Set<String>?
     /// Inspection focus is local to this view and never selects an approval.
     @State private var motionReviewFocus: ReferenceMotionReviewFocus?
-    @State private var reviewMovementDetail = false
+    @State private var reviewMotionDisplay: ReferenceMotionDetailPages.Display = .recordedTravel
     /// The EXISTING session-archive pipeline, reused verbatim for the raw
     /// diagnostic export. This screen adds no second archive format.
     @StateObject private var exportCoordinator = SessionExportCoordinator()
@@ -184,7 +184,7 @@ struct ReferenceAuthoringView: View {
         )
         .onChange(of: viewModel.reviewedTake?.id) { _, _ in
             motionReviewFocus = nil
-            reviewMovementDetail = false
+            reviewMotionDisplay = .recordedTravel
         }
         .onChange(of: viewModel.reviewedTake?.evidence.boundaries.repetitions) { _, _ in
             // A trim changes the inspected window; restore the compact chart height.
@@ -1962,11 +1962,14 @@ struct ReferenceAuthoringView: View {
                         }
                         .font(.caption)
                         if zoomed {
-                            Picker("Display", selection: $reviewMovementDetail) {
-                                Text("Recorded travel").tag(false)
-                                Text("Movement detail").tag(true)
+                            Picker("Display", selection: $reviewMotionDisplay) {
+                                Text("Recorded travel").tag(ReferenceMotionDetailPages.Display.recordedTravel)
+                                Text("Movement detail").tag(ReferenceMotionDetailPages.Display.movementDetail)
+                                if reviewTake?.recordedSamplePlayback != nil {
+                                    Text("Sample position").tag(ReferenceMotionDetailPages.Display.samplePosition)
+                                }
                             }
-                            .pickerStyle(.segmented).frame(maxWidth: 330)
+                            .pickerStyle(.segmented).frame(maxWidth: 500)
                         }
                     }
                     if selectedRange == nil {
@@ -1982,7 +1985,7 @@ struct ReferenceAuthoringView: View {
                             showBeatGrid: take.evidence.metadata.captureIntent?.isMovementCheck != true,
                             beatOffset: take.evidence.metadata.mediaTimeOrigin?.recordingStartOffsetSeconds ?? 0,
                             unavailableReason: take.samplePlaybackUnavailableReason,
-                            selectedRange: selectedRange, enhancesMovement: reviewMovementDetail),
+                            selectedRange: selectedRange, display: reviewMotionDisplay),
                         height: displayHeight, boundary: boundary, metadata: take.evidence.metadata,
                         canEdit: viewModel.canEditReviewedTake && !exportCoordinator.isPreparing,
                         commitBoundary: { adjusted in
@@ -2904,6 +2907,15 @@ private struct ReferenceReviewMovementReadout: View {
 /// Static review geometry is prepared off the UI thread. The complete
 /// repetition stays visible while only the independent playback cursor moves.
 struct ReferenceMotionDetailPages: Equatable, Sendable {
+    /// Mutually exclusive presentation choices. Sample playback coordinates
+    /// must never silently replace measured platter travel or receive the
+    /// per-movement emphasis intended for complete physical strokes.
+    enum Display: Hashable, Sendable {
+        case recordedTravel
+        case movementDetail
+        case samplePosition
+    }
+
     struct Request: Equatable, Sendable {
         let records: [ScratchNotation.GestureRecord]
         let fullFrame: ScratchStrokeGeometry.CanonicalFrame
@@ -2913,7 +2925,7 @@ struct ReferenceMotionDetailPages: Equatable, Sendable {
         let beatOffset: Double
         var unavailableReason: String? = nil
         var selectedRange: ClosedRange<Double>? = nil
-        var enhancesMovement: Bool = false
+        var display: Display = .recordedTravel
     }
     /// An explicit, pinned inspection request. Only the button captures the
     /// owned WAV time; playback ticks never enter this preparation identity.
@@ -2966,10 +2978,10 @@ struct ReferenceMotionDetailPages: Equatable, Sendable {
         let full = request.fullFrame
         let overview = ScratchStrokeGeometry.PreparedCanonicalChart(records: request.records,
             layer: .performance, frame: full, mixerFaders: request.mixerFaders)
-        let sample = request.samplePlayback.flatMap {
+        let sample = request.display == .samplePosition ? request.samplePlayback.flatMap {
             ScratchStrokeGeometry.samplePlaybackChart(timeline: $0, records: request.records,
                 frame: full, mixerFaders: request.mixerFaders)
-        }
+        } : nil
         let movements = ScratchStrokeGeometry.RecordedMotionReadout(records: request.records,
             coordinateSpace: full.coordinateSpace, permitsComparison: sample == nil)
         let selected = request.selectedRange ?? full.timeRange.lowerBound...min(full.timeRange.upperBound, full.timeRange.lowerBound + 8)
@@ -2985,7 +2997,7 @@ struct ReferenceMotionDetailPages: Equatable, Sendable {
                 frame: frame, mixerFaders: request.mixerFaders), resets: [])
         }
         let displayed: Page
-        if request.enhancesMovement,
+        if request.display == .movementDetail,
            let detail = ScratchStrokeGeometry.movementDetailChart(page.chart, resetMarkers: page.resets) {
             displayed = .init(chart: detail, resets: page.resets, isMovementDetail: true)
         } else {
@@ -3068,9 +3080,11 @@ private struct ReferenceMotionDetailView: View {
                         movements: prepared.movements, usesSamplePosition: prepared.usesSamplePosition)
                     Text(page.isMovementDetail
                         ? "Movement detail changes each movement’s height. Do not compare speed from slopes between movements."
-                        : (request.enhancesMovement
+                        : (request.display == .movementDetail
                             ? "Movement detail is unavailable for this evidence; recorded travel is shown."
-                            : "Recorded travel · one shared scale: gentler slopes mean slower movement; steeper slopes mean faster movement."))
+                            : (prepared.usesSamplePosition
+                                ? "Sample playback coordinates · loop boundaries may split a scratch. Use Recorded travel to compare platter speed."
+                                : "Recorded travel · one shared scale: gentler slopes mean slower movement; steeper slopes mean faster movement.")))
                         .font(.caption2).foregroundStyle(.secondary)
                         .frame(height: 28, alignment: .topLeading)
                     Text("Shaded ? intervals mark uncertain motion; the curve is withheld where the evidence is insufficient.")
@@ -3078,8 +3092,10 @@ private struct ReferenceMotionDetailView: View {
                         .opacity(page.chart.geometry.missingMotion.isEmpty ? 0 : 1)
                         .frame(height: 28, alignment: .topLeading)
                     Text(prepared.usesSamplePosition
-                        ? "Sample position · loop/cue restarts return to centre"
-                        : (request.unavailableReason ?? "Recorded motion · sample restart timing unavailable"))
+                        ? "Sample position · recorded loop/cue boundaries"
+                        : (request.display == .samplePosition
+                            ? (request.unavailableReason ?? "Sample position unavailable; recorded travel is shown.")
+                            : "Continuous platter travel · sample boundaries do not reset this trace"))
                         .font(.caption2).foregroundStyle(.secondary)
                         .frame(height: 16, alignment: .topLeading)
                     HStack {
