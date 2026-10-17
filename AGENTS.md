@@ -86,7 +86,7 @@ Always read these files before making changes:
 2. Select the first valid unchecked task
 3. State which task you selected and why
 4. Implement with minimal changes
-5. Run `scripts/build.sh`
+5. Run the checks required for the change's scope under Build Rules below
 6. Fix any compile errors introduced
 7. Append to `DEV_LOG.md`:
    - selected task
@@ -100,17 +100,22 @@ Always read these files before making changes:
 ## Definition Of Done
 A task is complete only when:
 - behavior is implemented
-- build succeeds OR failure is clearly unrelated
+- the affected-platform build succeeds OR failure is clearly unrelated
+- the required tests for the change's scope pass; report unrelated failures explicitly
 - `DEV_LOG.md` updated
 - `TASKS.md` updated correctly
 
 ---
 
 ## Build Rules
-- Default: `scripts/build.sh`
-- Covers: iOS, macOS, Watch
-- Platform-specific builds allowed during iteration
-- Full build required before completion unless blocked
+- User-selected cadence (18 October 2026): focused tests and an affected-platform build per fix; full suite for capture/data/shared changes and release candidates.
+- For routine platform-specific UI or layout fixes, run the affected behavior/layout/playback tests and a direct affected-target `xcodebuild` in owned output directories. Group related edits before repeating checks.
+- Run `scripts/build.sh all` for changes to capture, audio/MIDI, calibration, persistence, stored data, schemas, export, shared business logic/geometry, and release candidates. It covers the native/Python suites and iOS, macOS and Watch builds.
+- Every current `scripts/build.sh` mode, including `cxl` and `mac`, runs the complete native suite. Do not use those modes as a shortcut for a targeted iteration build.
+- For focused native tests, use `scripts/run_mac_test_gate.py --project ScratchLab.xcodeproj --mode software --only-testing ClassName/testMethod`; repeat `--only-testing` for related cases. Keep the supervisor's process ownership, evidence and admission checks. Do not reuse a complete-gate prepared context for a focused invocation.
+- Reuse passing receipts when the relevant source, configuration and dependencies are unchanged. Rerun affected checks after relevant changes or a failure; do not blindly repeat a failed gate or weaken assertions, identity/loss checks, or timing limits to obtain a pass.
+- Stop downstream installation/release work on a required failure, diagnose its cause, then verify the bounded repair before resuming. Software, installation, live UI and physical acceptance remain separate.
+- An explicitly authorized work-in-progress checkpoint may record pending or failed verification honestly; it does not require a new full run or establish release readiness. Commit/push authorization rules still apply.
 
 ### CXL Mac installation identity
 

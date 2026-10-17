@@ -1,6 +1,8 @@
-## Current explicit user task — review representation, 17 October 2026
+## Completed explicit user task — review representation,17–18October2026
 
-- [ ] Make Recorded travel the actual physical-motion default when sample history exists; separate sample position from movement emphasis. Verify the supplied 80 BPM seam recrossings and the historical 95 BPM fallback, required gates, signed installation and saved-file preservation. Follow-up sample-phase and export work is ordered in docs/notation_correction_prompts_20261017.md. WIP overnight checkpoint: warm/access and focused8/8 PASS; full gate user-interrupted after3095 passes/24 skips/0 failed assertions. No platform build/install; remain unchecked until completed.
+- [x] Make Recorded travel the actual physical-motion default with sample history; keep physical Movement detail and explicit Sample position separate. Under the user's explicit targeted-development policy: matching focused8 plus fresh playback2 passed, eight matching renders reused, signed universal Mac build/ZIP/install/live UI/preservation passed. Existing test-helper readiness race reproduced red2/2 and repaired green2/2 without changing product clock/timeout/interval/identity/loss assertions. All57 original files and both older apps preserved. See18October explicit-review-resume/RESULT.md. Checkpoint/push identity is in GIT-RECEIPT.json.
+- [ ] Before releasing the combined candidate, complete the full98-selector/27-render/all-platform gate. Explicitly deferred by user for this development iteration; neither interrupted run is a pass. Next implementation batches remain in docs/notation_correction_prompts_20261017.md; shared/capture/data changes still require the full gate under the new policy.
+
 
 ## Completed explicit user task — review readability, 17 October 2026
 

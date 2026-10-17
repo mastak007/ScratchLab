@@ -9,6 +9,7 @@
 - Do not touch unrelated dirty work.
 - Use small diffs.
 - Add/update tests for behaviour changes.
+- Follow AGENTS.md Build Rules: focused tests and the affected-platform build per fix; full suite for capture/data/shared changes and release candidates. Reuse unchanged receipts and keep required failure/physical-evidence boundaries intact.
 - Do not train models unless explicitly asked.
 - Do not bundle `.mlmodel`, `.mlmodelc`, `.mlpackage` unless explicitly approved.
 - Do not use YouTube/Ortofon material for training.

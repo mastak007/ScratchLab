@@ -876,9 +876,15 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
 
     private func waitForPlayer(_ player: AVPlayer, at seconds: Double) async throws {
         let deadline = Date().addingTimeInterval(5)
-        while abs(player.currentTime().seconds - seconds) > 0.01, Date() < deadline {
+        // AVPlayer can publish the seek time before its item is ready. Match
+        // the review clock's readiness guard rather than accepting time alone.
+        while (player.currentItem?.status != .readyToPlay
+            || !player.currentTime().isNumeric
+            || abs(player.currentTime().seconds - seconds) > 0.01), Date() < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
+        XCTAssertEqual(player.currentItem?.status, .readyToPlay)
+        XCTAssertTrue(player.currentTime().isNumeric)
         XCTAssertEqual(player.currentTime().seconds, seconds, accuracy: 0.01)
     }
 
