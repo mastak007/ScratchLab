@@ -2048,8 +2048,8 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         line: UInt = #line
     ) throws {
         XCTAssertTrue(
-            viewSource.contains("canonicalTearChart(\n                title: \"CANONICAL TEAR STRUCTURE — FINALIZED TAKE\",\n                projection: take.tearProjection,"),
-            "the finalized chart must use its take's canonical projection accessor",
+            viewSource.contains("canonicalTearChart(\n                title: \"RECORDED TEAR MOTION — DERIVED REVIEW\",\n                projection: take.recordedMotionReview.displayProjection,"),
+            "the finalized chart must explicitly use the separate recorded-motion display derivative",
             file: file, line: line
         )
         let sessionURL = URL(fileURLWithPath: #filePath)
@@ -2057,6 +2057,18 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("ScratchLab/Models/Reference/ReferenceAuthoringSession.swift")
         let sessionSource = try String(contentsOf: sessionURL, encoding: .utf8)
+        XCTAssertEqual(viewSource.components(separatedBy: "projection: take.recordedMotionReview.displayProjection").count - 1, 3,
+            "The motion, Tear and repetition views must use the same derived display", file: file, line: line)
+        XCTAssertTrue(viewSource.contains("ReferenceRecordedMotionReview.explanation"),
+            "Derived display and uncertainty must be explicit", file: file, line: line)
+        let modelURL = sessionURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("ScratchLabDesktop/ViewModels/ReferenceAuthoringViewModel.swift")
+        let modelSource = try String(contentsOf: modelURL, encoding: .utf8)
+        XCTAssertTrue(modelSource.contains("reviewedTake?.tearProjection"),
+            "Comparison must still consume canonical evidence", file: file, line: line)
+        XCTAssertTrue(modelSource.contains("projection: take.tearProjection,"),
+            "Saved/exported evidence must still use canonical output", file: file, line: line)
+
         XCTAssertTrue(
             sessionSource.contains("if let restoredTearProjection {"),
             "the take must preserve restored historical canonical output",
@@ -2343,8 +2355,8 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         }
     }
 
-    /// Live preview and fresh finalized review share the SAME projection
-    /// builder. Restored review retains its historical canonical output.
+    /// Live and finalized evidence retain one canonical builder. The finalized
+    /// display separately qualifies low-confidence raw travel; stored output survives.
     func testAuthoringLiveAndReviewShareOneTearProjection() throws {
         let source = try authoringViewSource()
         XCTAssertTrue(
@@ -4228,8 +4240,8 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         )
     }
 
-    /// Finalized review uses stored canonical output or the shared builder;
-    /// the preview never reaches that take-owned projection.
+    /// Canonical ownership stays unchanged while finalized display uses an explicit
+    /// derivative. Live preview, comparison and persisted evidence stay canonical.
     func testFinalizedNotationBehaviourIsUnchanged() throws {
         let source = try authoringViewSource()
         try assertFinalizedTearProjectionContract(in: source)

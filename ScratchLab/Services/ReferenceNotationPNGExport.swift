@@ -4,7 +4,8 @@ import ImageIO
 import UniformTypeIdentifiers
 
 /// A derived reference picture, never a replacement for captured evidence.
-/// The stored projection goes straight to the same chart used by finalized review.
+/// The explicit display derivative uses the same chart as finalized review;
+/// canonical evidence remains stored separately, unchanged.
 enum ReferenceNotationPNGExport {
     static let width = 1600
     static let height = 1420
@@ -49,7 +50,7 @@ enum ReferenceNotationPNGExport {
         // Internal derived-picture identity, not a stored capture/schema revision.
         // Old pictures must not be mistaken for this layout at identical bounds.
         private struct RenderIdentity: Encodable { let revision: Int; let request: Request }
-        var identity: String { get throws { try ExportSemanticIdentity.digest(RenderIdentity(revision: 2, request: self)) } }
+        var identity: String { get throws { try ExportSemanticIdentity.digest(RenderIdentity(revision: 3, request: self)) } }
 
         struct RepetitionEdge {
             let repetitionNumber: Int
@@ -246,7 +247,8 @@ private struct ReferenceNotationPNGPage: View {
                 }
             }
             Spacer(minLength: 0)
-            Text("Dim/dashed platter = fader closed · Shaded gaps = unknown motion · Separate fader lanes retain recorded controls")
+            Text(ReferenceRecordedMotionReview.explanation)
+            Text("Dim/dashed platter = fader closed · Grey gaps = unknown motion · Separate fader lanes retain recorded controls")
             Text("Same time scale on every row. Each row has its own fixed linear height scale: compare slopes within a row, not across rows.")
             Text("Gold lines = saved repetition in (solid) / out (dashed). Blank space after the final row is outside the recording.")
             Text("Measured curves retain their original timing and shape. Visual reference only; not calibration, approval or training data.")

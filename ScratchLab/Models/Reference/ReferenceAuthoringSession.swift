@@ -1063,6 +1063,7 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
            existing.capturedTakeNumber == refreshedSourceBinding.capturedTakeNumber,
            existing.rawSidecarFileName == refreshedSourceBinding.rawSidecarFileName {
             takes[takeIndex].tearEvidenceSourceBinding = refreshedSourceBinding
+            takes[takeIndex].recordedReviewMotion = ReferenceRecordedMotionReview.boundMotion(source: refreshedSourceBinding)
         }
         revalidateTakeInReview(expectation: expectation, now: now)
     }
@@ -1639,6 +1640,7 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
 struct ReferenceAuthoringTake: Equatable, Sendable, Identifiable {
     fileprivate(set) var tearEvidenceSourceBinding: ReferenceTearEvidenceSourceBinding?
     let rawSidecarURL: URL?
+    fileprivate var recordedReviewMotion: CaptureCore.PlatterMotionEvidence?
     fileprivate(set) var restoredTearProjection: ReferenceTearCanonicalProjection?
     fileprivate(set) var restoredTearPerformedLimitations: [String: [CanonicalTearComparison.UnavailableReason]]?
     fileprivate(set) var evidence: ReferenceTakeEvidence
@@ -1672,6 +1674,7 @@ struct ReferenceAuthoringTake: Equatable, Sendable, Identifiable {
         rawSidecarURL: URL? = nil
     ) {
         self.tearEvidenceSourceBinding = tearEvidenceSourceBinding
+        self.recordedReviewMotion = ReferenceRecordedMotionReview.boundMotion(source: tearEvidenceSourceBinding)
         self.rawSidecarURL = rawSidecarURL
         self.evidence = evidence
         if let playback = evidence.samplePlayback {
@@ -1697,6 +1700,11 @@ struct ReferenceAuthoringTake: Equatable, Sendable, Identifiable {
         self.latestValidation = latestValidation
         self.tearReview = tearReview
             ?? ReferenceTearSegmentationReviewBuilder.build(for: evidence)
+    }
+
+    /// Explicit display derivative; never returned to canonical/export evidence.
+    var recordedMotionReview: ReferenceRecordedMotionReview {
+        .init(canonical: tearProjection, review: tearReview, motion: recordedReviewMotion)
     }
 
     var tearProjection: ReferenceTearCanonicalProjection {

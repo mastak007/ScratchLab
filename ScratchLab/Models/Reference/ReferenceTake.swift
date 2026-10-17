@@ -3295,6 +3295,31 @@ enum ReferenceTearEvidenceCodec {
     }
 }
 
+/// Display-only reconstruction from bound raw packets. Never used for approval,
+/// comparison, saved projections or canonical JSON. Historical evidence survives.
+struct ReferenceRecordedMotionReview: Equatable, Sendable {
+    static let uncertaintyReason = "review_only_low_movement_confidence"
+    static let explanation = "Derived recorded motion · Amber bands show low-confidence movement, excluded from comparison. Grey gaps remain unknown. Saved evidence is unchanged."
+    let displayProjection: ReferenceTearCanonicalProjection
+
+    /// Qualified once by a take owner or export preparation, not a playback tick.
+    static func boundMotion(source: ReferenceTearEvidenceSourceBinding?) -> CaptureCore.PlatterMotionEvidence? {
+        guard let source,
+              (try? ReferenceTearEvidenceCodec.makeSourceBinding(rawSidecarData: source.rawSidecarData,
+                  fileName: source.rawSidecarFileName)) == source else { return nil }
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        guard let sidecar = try? decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: source.rawSidecarData),
+              let raw = sidecar.detectedNotation?.mixerMidiEvents, !raw.isEmpty else { return nil }
+        return CaptureCore.derivePlatterMotionEvidence(from: raw)
+    }
+
+    init(canonical: ReferenceTearCanonicalProjection, review: ReferenceTearSegmentationReview,
+         motion: CaptureCore.PlatterMotionEvidence?) {
+        displayProjection = ReferenceTearCanonicalProjectionBuilder.recordedMotionDisplay(
+            canonical, review: review, motion: motion)
+    }
+}
+
 enum ReferenceTearCanonicalProjectionBuilder {
 
     /// The coordinate space this projection claims is the one the REVIEW
@@ -3391,6 +3416,71 @@ enum ReferenceTearCanonicalProjectionBuilder {
         )
     }
 
+    /// Recover only a single, decoder-accepted travel run whose sole projection
+    /// rejection was confidence. Dense packets are mandatory: no endpoint fallback,
+    /// inferred hold, manual correction or reconstruction across missing evidence.
+    fileprivate static func recordedMotionDisplay(
+        _ canonical: ReferenceTearCanonicalProjection, review: ReferenceTearSegmentationReview,
+        motion: CaptureCore.PlatterMotionEvidence?
+    ) -> ReferenceTearCanonicalProjection {
+        guard let motion, !motion.trajectorySegments.isEmpty,
+              canonical.coordinateSpace == declaredCoordinateSpace(for: review) else { return canonical }
+        let configuration = ReferenceTearReviewConfiguration()
+        let records = canonical.records.map { old -> ScratchNotation.GestureRecord in
+            guard old.evidence.provenance == .unknown,
+                  old.evidence.observation.reason == ReferenceTearProjectionReason.lowMovementConfidence.rawValue,
+                  old.subdivisions.count == 1, old.internalHolds.isEmpty,
+                  let candidate = review.candidates.first(where: { $0.id == old.id }),
+                  candidate.boundaries.isEmpty, candidate.manualClassification == nil,
+                  candidate.motionSegmentIndices.count == 1,
+                  old.subdivisions[0].span == candidate.span,
+                  old.direction == candidate.direction,
+                  old.coordinateSpace == canonical.coordinateSpace,
+                  old.timingDomain == .seconds,
+                  !review.hasInterruptedEvidence(in: candidate.span),
+                  let index = candidate.motionSegmentIndices.first,
+                  review.segments.indices.contains(index),
+                  let eventIndex = review.segments[index].movementEventIndex,
+                  review.rawMovementEvents.indices.contains(eventIndex),
+                  let confidence = candidate.proposedConfidence,
+                  confidence.isFinite, confidence >= 0, confidence < configuration.lowMovementConfidence else { return old }
+            let event = review.rawMovementEvents[eventIndex]
+            // The actual decoder must still accept this exact run. A stored event
+            // alone cannot bypass its duration, packet, route or counter gates.
+            let accepted = motion.events.filter {
+                abs($0.startTime - event.startTime) <= 1e-9
+                    && abs($0.endTime - event.endTime) <= 1e-9
+                    && $0.direction == event.direction && $0.source == event.source
+                    && $0.movementKind == event.movementKind
+                    && $0.confidence == event.confidence
+            }
+            guard accepted.count == 1, event.confidence == confidence else { return old }
+            let built = buildRecord(candidate: candidate, review: review,
+                configuration: configuration, platterTrajectorySegments: motion.trajectorySegments,
+                showsQualifiedLowConfidenceTravel: true).record
+            guard built.evidence.provenance == .measured, built.motionValidationIssues().isEmpty,
+                  built.internalHolds.isEmpty, built.subdivisions.count == 1,
+                  built.subdivisions[0].measuredCurve != nil else { return old }
+            let observation = built.evidence.observation
+            return .init(id: old.id, direction: old.direction, timingDomain: old.timingDomain,
+                coordinateSpace: old.coordinateSpace,
+                evidence: .init(provenance: .measured,
+                    observation: .init(source: observation.source, confidence: observation.confidence,
+                        reason: ReferenceRecordedMotionReview.uncertaintyReason,
+                        rawSampleCount: observation.rawSampleCount)),
+                subdivisions: built.subdivisions, internalHolds: [],
+                faderTransitions: old.faderTransitions, faderIntervals: old.faderIntervals)
+        }
+        guard records != canonical.records else { return canonical }
+        let positions = records.flatMap { $0.subdivisions.flatMap { $0.measuredCurve?.points.map(\.position) ?? [] } }
+            + records.flatMap { $0.internalHolds.compactMap(\.position) }
+        let range: ClosedRange<Double>?
+        if let lower = positions.min(), let upper = positions.max(), lower < upper { range = lower...upper }
+        else { range = canonical.positionRange }
+        return .init(records: records, timeRange: canonical.timeRange, positionRange: range,
+            coordinateSpace: canonical.coordinateSpace, reasons: canonical.reasons, mixerFaders: canonical.mixerFaders)
+    }
+
     // MARK: One gesture
 
     private struct BuiltRecord {
@@ -3403,7 +3493,8 @@ enum ReferenceTearCanonicalProjectionBuilder {
         candidate: ReferenceTearCandidate,
         review: ReferenceTearSegmentationReview,
         configuration: ReferenceTearReviewConfiguration,
-        platterTrajectorySegments: [CaptureCore.PlatterTrajectorySegment]
+        platterTrajectorySegments: [CaptureCore.PlatterTrajectorySegment],
+        showsQualifiedLowConfidenceTravel: Bool = false
     ) -> BuiltRecord {
         var reasons: [ReferenceTearProjectionReason] = []
         let coordinateSpace = declaredCoordinateSpace(for: review)
@@ -3464,7 +3555,7 @@ enum ReferenceTearCanonicalProjectionBuilder {
             return unknownRecord(.unsupportedCoordinateSpace)
         }
         if let confidence = candidate.proposedConfidence,
-           confidence < configuration.lowMovementConfidence {
+           confidence < configuration.lowMovementConfidence, !showsQualifiedLowConfidenceTravel {
             return unknownRecord(.lowMovementConfidence)
         }
 

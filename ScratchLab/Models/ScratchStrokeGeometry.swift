@@ -181,9 +181,10 @@ enum ScratchStrokeGeometry {
                 occupied.append((owner, extent))
                 let validRecord = record.coordinateSpace == coordinateSpace
                     && record.evidence.provenance == .measured
+                    && record.evidence.observation.reason != ReferenceRecordedMotionReview.uncertaintyReason
                     && record.motionValidationIssues().isEmpty
                 for subdivision in record.subdivisions {
-                    let reason = record.evidence.observation.reason == "lowMovementConfidence"
+                    let reason = ["lowMovementConfidence", ReferenceRecordedMotionReview.uncertaintyReason].contains(record.evidence.observation.reason)
                         ? "This movement falls below the review confidence threshold."
                         : "Recorded movement is unavailable here."
                     guard validRecord, subdivision.evidence.provenance == .measured,
@@ -664,7 +665,8 @@ extension ScratchStrokeGeometry {
                 timeRange: geometry.motion.timeRange), missingMotion: geometry.missingMotion,
                 fader: geometry.fader, faderEdges: geometry.faderEdges,
                 hasUnplacedEvidence: geometry.hasUnplacedEvidence),
-            mixerSpans: prepared.mixerSpans, combinedMixerSpans: prepared.combinedMixerSpans)
+            mixerSpans: prepared.mixerSpans, combinedMixerSpans: prepared.combinedMixerSpans,
+            uncertainMotion: prepared.uncertainMotion)
     }
 
     struct PlaybackResetMarker: Equatable, Sendable {
@@ -715,7 +717,7 @@ extension ScratchStrokeGeometry {
                 },
                 combinedMixerSpans: prepared.combinedMixerSpans.map {
                     ScratchMixerFaderEvidence.Span.clipped($0, to: bounds)
-                }),
+                }, uncertainMotion: prepared.uncertainMotion.compactMap(clipped)),
                 resets: resets.filter { bounds.contains($0.time) })
         }
     }
@@ -870,7 +872,8 @@ extension ScratchStrokeGeometry {
                 missingMotion: missing, fader: original.geometry.fader,
                 faderEdges: original.geometry.faderEdges,
                 hasUnplacedEvidence: original.geometry.hasUnplacedEvidence),
-            mixerSpans: original.mixerSpans, combinedMixerSpans: original.combinedMixerSpans),
+            mixerSpans: original.mixerSpans, combinedMixerSpans: original.combinedMixerSpans,
+            uncertainMotion: original.uncertainMotion),
             resets: resets.filter { frame.timeRange.contains($0.time) })
     }
 
@@ -1099,12 +1102,15 @@ extension ScratchStrokeGeometry {
         let geometry: CanonicalGeometry
         let mixerSpans: [ScratchMixerFaderEvidence.Control: [ScratchMixerFaderEvidence.Span]]?
         let combinedMixerSpans: [ScratchMixerFaderEvidence.Span]?
+        let uncertainMotion: [ClosedRange<Double>]
 
         init(records: [ScratchNotation.GestureRecord], layer: CanonicalLayer,
              frame: CanonicalFrame, wrapPeriod: Double? = nil,
              mixerFaders: ScratchMixerFaderEvidence? = nil) {
             self.frame = frame
             self.layer = layer
+            uncertainMotion = records.filter { $0.evidence.observation.reason == ReferenceRecordedMotionReview.uncertaintyReason }
+                .flatMap { $0.subdivisions.map { $0.span.startTime...$0.span.endTime } }
             geometry = canonicalGeometry(records: records, layer: layer,
                                          frame: frame, wrapPeriod: wrapPeriod)
             mixerSpans = mixerFaders.map { evidence in
@@ -1118,12 +1124,14 @@ extension ScratchStrokeGeometry {
         init(frame: CanonicalFrame, layer: CanonicalLayer,
                          geometry: CanonicalGeometry,
                          mixerSpans: [ScratchMixerFaderEvidence.Control: [ScratchMixerFaderEvidence.Span]]?,
-                         combinedMixerSpans: [ScratchMixerFaderEvidence.Span]?) {
+                         combinedMixerSpans: [ScratchMixerFaderEvidence.Span]?,
+                         uncertainMotion: [ClosedRange<Double>] = []) {
             self.frame = frame
             self.layer = layer
             self.geometry = geometry
             self.mixerSpans = mixerSpans
             self.combinedMixerSpans = combinedMixerSpans
+            self.uncertainMotion = uncertainMotion
         }
     }
 

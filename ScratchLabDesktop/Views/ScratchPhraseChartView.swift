@@ -202,6 +202,21 @@ struct ScratchPhraseChartView: View {
         platterContext.clip(to: Path(CGRect(origin: .zero, size: viewport.size)))
         ScratchMotionRenderer.draw(geometry.motion, in: platterContext, viewport: viewport, style: style,
             crossInsetFraction: canonicalMotionInsetFraction)
+        // These intervals have qualified measured vertices but remain below the
+        // review confidence cutoff. Show the curve and its uncertainty together.
+        for range in prepared.uncertainMotion {
+            let lower = max(start, range.lowerBound), upper = min(start + duration, range.upperBound)
+            guard lower < upper else { continue }
+            let x = CGFloat(lower - start) * pps, width = CGFloat(upper - lower) * pps
+            let band = CGRect(x: x, y: 16, width: width, height: max(0, platterHeight - 30))
+            platterContext.fill(Path(band), with: .color(.orange.opacity(0.13)))
+            var cap = Path(); cap.move(to: .init(x: x, y: 17)); cap.addLine(to: .init(x: x + width, y: 17))
+            platterContext.stroke(cap, with: .color(.orange.opacity(0.8)), lineWidth: 2)
+            if width >= 70 {
+                platterContext.draw(Text("LOW CONF.").font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(.orange), at: .init(x: x + width / 2, y: 25))
+            }
+        }
         for marker in sampleResetMarkers where frame.timeRange.contains(marker.time) {
             let x = CGFloat(marker.time - start) * pps
             var line = Path()

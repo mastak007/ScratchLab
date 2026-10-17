@@ -1921,6 +1921,35 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         XCTAssertEqual(take.tearReview.totalCountedTearHoldCount, 0)
     }
 
+    func testConfidenceOnlyReviewExportAndRestoreKeepCanonicalEvidenceUnknown() async throws {
+        let files = try await fixture(Self.withFader(Self.packets(1, count: 30)))
+        let owner = worker([files])
+        let take = try await record(owner)
+        let canonical = take.tearProjection
+        let display = take.recordedMotionReview.displayProjection
+        XCTAssertEqual(canonical.records.count, 1)
+        XCTAssertEqual(canonical.records.first?.evidence.provenance, .unknown)
+        XCTAssertEqual(display.records.first?.evidence.observation.reason, ReferenceRecordedMotionReview.uncertaintyReason)
+        XCTAssertEqual(display.records.first?.evidence.observation.confidence ?? 0, 0.73, accuracy: 1e-9)
+        XCTAssertFalse(display.records[0].subdivisions.compactMap(\.measuredCurve).isEmpty)
+        let optional = try await owner.rawCaptureExportSnapshot(config: files.config)
+        let snapshot = try XCTUnwrap(optional)
+        let builder = SessionArchiveBuilder()
+        let package = try builder.preparePackage(from: snapshot.source)
+        let binding = try XCTUnwrap(take.tearEvidenceSourceBinding)
+        let companion = try XCTUnwrap(package.referenceTearEvidenceByTakeID[binding.capturedTakeID])
+        let evidence = try ReferenceTearEvidenceCodec.decodeDocument(companion)
+        XCTAssertEqual(evidence.projection, canonical)
+        XCTAssertEqual(evidence.performedLimitations, take.tearPerformedLimitations)
+        let picture = try XCTUnwrap(builder.notationPNGRequests(for: package).first { $0.takeID == binding.capturedTakeID })
+        XCTAssertEqual(picture.projection, display)
+        XCTAssertEqual(package.referenceTearEvidenceByTakeID[binding.capturedTakeID], companion)
+        let restored = try await roundTrip(files, worker: owner)
+        XCTAssertEqual(restored.tearProjection, canonical)
+        XCTAssertEqual(restored.recordedMotionReview.displayProjection, display)
+        XCTAssertEqual(try Data(contentsOf: files.sidecarURL), files.sidecarData)
+    }
+
     func testLowConfidenceThirtyStepHoldProposalRemainsUnavailableAfterArchiveRestore() async throws {
         let fixture = try await fixture(Self.withFader(Self.tear(holds: 1, runPacketCount: 30)))
         let owner = worker([fixture])
@@ -1935,6 +1964,7 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         }
         XCTAssertEqual(try XCTUnwrap(candidate.proposedConfidence), 0.73, accuracy: 1e-9)
         XCTAssertTrue(take.tearProjection.reasons.contains(.lowMovementConfidence))
+        XCTAssertEqual(take.recordedMotionReview.displayProjection, take.tearProjection, "A low-confidence hold proposal must not become visible as a measured hold")
         let record = try XCTUnwrap(take.tearProjection.records.first)
         XCTAssertEqual(record.evidence.provenance, .unknown)
         XCTAssertTrue(record.internalHolds.isEmpty)
@@ -5321,6 +5351,87 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
         XCTAssertNil(conflictedHold.at(0.35))
         XCTAssertEqual(conflictedHold.unavailableReason(at: 0.35), "Recorded movement is unavailable here.",
             "Conflicting motion cannot be labelled as an observed hold")
+    }
+
+    func testSuppliedConfidenceOnlyMotionIsVisibleWithoutChangingCanonicalEvidence() throws {
+        for (key, count) in [("SL_EXPORT_80_DRAFT_PATH", 9), ("SL_CENTRED_REVIEW_DRAFT_PATH", 7)] {
+            guard let path = ProcessInfo.processInfo.environment[key] else {
+                throw XCTSkip("Supply the bound saved 80 and 95 BPM drafts.")
+            }
+            let original = try Data(contentsOf: URL(fileURLWithPath: path))
+            struct Envelope: Decodable { let payload: Data; let sha256: String }
+            let envelope = try JSONDecoder().decode(Envelope.self, from: original)
+            XCTAssertEqual(ReferencePackageIO.sha256Hex(envelope.payload), envelope.sha256)
+            let draft = try JSONDecoder().decode(ReferenceSavedDraft.self, from: envelope.payload)
+            let canonical = draft.projection
+            let low = canonical.records.filter { $0.evidence.observation.reason == "lowMovementConfidence" }
+            XCTAssertEqual(low.count, count)
+            let motion = try XCTUnwrap(ReferenceRecordedMotionReview.boundMotion(source: draft.sourceBinding))
+            let display = ReferenceRecordedMotionReview(canonical: canonical, review: draft.tearReview,
+                motion: motion).displayProjection
+            let frame = try XCTUnwrap(ReferenceAuthoringViewModel.canonicalFrame(for: display, bpm: Double(draft.evidence.metadata.bpm)))
+            let chart = ScratchStrokeGeometry.PreparedCanonicalChart(records: display.records, layer: .performance,
+                frame: frame, mixerFaders: display.mixerFaders)
+            let readout = ScratchStrokeGeometry.RecordedMotionReadout(records: display.records,
+                coordinateSpace: display.coordinateSpace)
+            XCTAssertEqual(chart.uncertainMotion.count, count)
+            XCTAssertEqual(display.records.count, canonical.records.count)
+            XCTAssertEqual(display.mixerFaders, canonical.mixerFaders)
+            let lowIDs = Set(low.map(\.id))
+            XCTAssertEqual(display.records.filter { !lowIDs.contains($0.id) }, canonical.records.filter { !lowIDs.contains($0.id) })
+            for old in low {
+                let shown = try XCTUnwrap(display.records.first { $0.id == old.id })
+                let curve = try XCTUnwrap(shown.subdivisions.first?.measuredCurve,
+                    "Accepted recorded run \(old.id) must remain visible with uncertainty")
+                XCTAssertGreaterThan(curve.points.count, 2)
+                XCTAssertEqual(shown.subdivisions.map(\.span), old.subdivisions.map(\.span))
+                XCTAssertEqual(shown.evidence.observation.reason, ReferenceRecordedMotionReview.uncertaintyReason)
+                let candidate = try XCTUnwrap(draft.tearReview.candidates.first { $0.id == old.id })
+                XCTAssertEqual(shown.evidence.observation.confidence, try XCTUnwrap(candidate.proposedConfidence))
+                XCTAssertLessThan(shown.evidence.observation.confidence, 0.75)
+                XCTAssertEqual(old.evidence.provenance, .unknown, "Canonical eligibility stays unchanged")
+                XCTAssertEqual(shown.faderIntervals, old.faderIntervals)
+                XCTAssertEqual(shown.faderTransitions, old.faderTransitions)
+                let midpoint = (candidate.span.startTime + candidate.span.endTime) / 2
+                XCTAssertFalse(chart.geometry.missingMotion.contains { $0.contains(midpoint) })
+                XCTAssertNil(readout.at(midpoint), "An uncertain visible curve is not speed-comparison evidence")
+                XCTAssertEqual(readout.unavailableReason(at: midpoint), "This movement falls below the review confidence threshold.")
+            }
+            for gap in draft.tearReview.platterEvidenceIntervals where gap.kind != .observedStillness && gap.endTime > gap.startTime {
+                let midpoint = (gap.startTime + gap.endTime) / 2
+                if frame.timeRange.contains(midpoint) {
+                    XCTAssertTrue(chart.geometry.missingMotion.contains { $0.contains(midpoint) }, "Real gap \(gap) must remain unknown")
+                }
+            }
+            let missing = ReferenceRecordedMotionReview(canonical: canonical, review: draft.tearReview, motion: nil)
+            XCTAssertEqual(missing.displayProjection, canonical)
+            let noPackets = CaptureCore.PlatterMotionEvidence(events: motion.events, intervals: motion.intervals, trajectorySegments: [])
+            XCTAssertEqual(ReferenceRecordedMotionReview(canonical: canonical, review: draft.tearReview,
+                motion: noPackets).displayProjection, canonical, "Never substitute endpoint lines")
+            let noAcceptedRuns = CaptureCore.PlatterMotionEvidence(events: [], intervals: motion.intervals,
+                trajectorySegments: motion.trajectorySegments)
+            XCTAssertEqual(ReferenceRecordedMotionReview(canonical: canonical, review: draft.tearReview,
+                motion: noAcceptedRuns).displayProjection, canonical, "Dense packets alone cannot bypass decoder gates")
+            let owner = try ReferenceAuthoringSession(reviewing: draft, operatorName: "Test review")
+            let take = try XCTUnwrap(owner.takes.first)
+            XCTAssertEqual(take.recordedMotionReview.displayProjection, display)
+            XCTAssertEqual(take.tearProjection, canonical)
+            XCTAssertEqual(take.tearPerformedLimitations, draft.performedLimitations)
+            XCTAssertEqual(take.evidence, draft.evidence)
+            let detail = ScratchStrokeGeometry.movementDetailChart(chart, resetMarkers: [])
+            XCTAssertEqual(try XCTUnwrap(detail).uncertainMotion, chart.uncertainMotion)
+            if let folder = ProcessInfo.processInfo.environment["SL_CONFIDENCE_RENDER_DIR"] {
+                let request = try ReferenceNotationPNGExport.Request(performer: draft.evidence.metadata.performerName,
+                    sessionID: draft.sourceBinding.capturedSessionID, takeID: draft.id, takeNumber: 1,
+                    scratchType: "Baby scratch", bpm: draft.evidence.metadata.bpm,
+                    duration: frame.timeRange.upperBound, showBeatGrid: true, projection: display,
+                    sourceIdentity: draft.sourceBinding.rawSidecarSHA256)
+                let png = try ReferenceNotationPNGExport.render(request, page: 0)
+                try png.write(to: URL(fileURLWithPath: folder).appendingPathComponent("confidence-\(draft.evidence.metadata.bpm).png"))
+                XCTAssertEqual(png, try ReferenceNotationPNGExport.render(request, page: 0))
+            }
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), original)
+        }
     }
 
     func testSupplied95BPMRecordedMotionReadoutRetainsMeasuredRatesAndGap() throws {

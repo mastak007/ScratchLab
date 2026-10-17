@@ -1873,6 +1873,9 @@ struct ReferenceAuthoringView: View {
             Text(title)
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color(white: 0.55))
+            if reviewTake != nil {
+                Text(ReferenceRecordedMotionReview.explanation).font(.caption2).foregroundStyle(.secondary)
+            }
             if let sourceFrame = preparedChart?.frame ?? ReferenceAuthoringViewModel.canonicalFrame(
                 for: projection,
                 bpm: chartBPM
@@ -2056,7 +2059,7 @@ struct ReferenceAuthoringView: View {
                 }
                 .frame(height: 64)
             } else {
-                projectionReasons(preparedReasons ?? projection.presentationReasons)
+                projectionReasons(preparedReasons ?? projection.presentationReasons.filter { reviewTake == nil || $0 != .lowMovementConfidence })
             }
         }
     }
@@ -2077,7 +2080,7 @@ struct ReferenceAuthoringView: View {
             Text("\(take.evidence.metadata.technique.displayName) motion review").font(.headline)
             canonicalTearChart(
                 title: "RECORDED PLATTER AND FADER MOTION",
-                projection: take.tearProjection,
+                projection: take.recordedMotionReview.displayProjection,
                 emptyMessage: "No recorded platter motion is available.",
                 recordedBPM: take.evidence.metadata.bpm,
                 reviewTake: take
@@ -2184,8 +2187,8 @@ struct ReferenceAuthoringView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Tear segmentation review").font(.headline)
             canonicalTearChart(
-                title: "CANONICAL TEAR STRUCTURE — FINALIZED TAKE",
-                projection: take.tearProjection,
+                title: "RECORDED TEAR MOTION — DERIVED REVIEW",
+                projection: take.recordedMotionReview.displayProjection,
                 emptyMessage: "No tear structure could be placed from this take's evidence.",
                 recordedBPM: take.evidence.metadata.bpm,
                 reviewTake: take
@@ -2662,7 +2665,7 @@ struct ReferenceAuthoringView: View {
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     canonicalTearChart(
                         title: "REPETITION NOTATION",
-                        projection: take.tearProjection,
+                        projection: take.recordedMotionReview.displayProjection,
                         emptyMessage: "No notation is available for this take.",
                         recordedBPM: take.evidence.metadata.bpm,
                         reviewTake: take
@@ -3124,7 +3127,7 @@ private struct ReferenceMotionDetailView: View {
                         .font(.caption2).foregroundStyle(.secondary)
                         .frame(height: 28, alignment: .topLeading)
                     Text(prepared.usesSamplePosition
-                        ? "Shaded intervals mark unavailable playback history; no connecting path is invented."
+                        ? "Grey shaded intervals mark unavailable playback history; no connecting path is invented."
                         : "Shaded ? intervals mark uncertain motion; the curve is withheld where the evidence is insufficient.")
                         .font(.caption2).foregroundStyle(.secondary)
                         .opacity(page.chart.geometry.missingMotion.isEmpty ? 0 : 1)

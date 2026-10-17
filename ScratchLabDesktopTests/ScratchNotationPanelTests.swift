@@ -2469,7 +2469,8 @@ final class ReferenceNotationPNGTests: XCTestCase {
             XCTAssertEqual(ReferencePackageIO.sha256Hex(envelope.payload), envelope.sha256)
             let draft = try JSONDecoder().decode(ReferenceSavedDraft.self, from: envelope.payload)
             XCTAssertEqual(draft.evidence.metadata.bpm, bpm)
-            let projection = draft.projection
+            let projection = ReferenceRecordedMotionReview(canonical: draft.projection, review: draft.tearReview,
+                motion: ReferenceRecordedMotionReview.boundMotion(source: draft.sourceBinding)).displayProjection
             XCTAssertEqual(projection.records.count, bpm == 80 ? 92 : 77)
             let duration = try XCTUnwrap(draft.evidence.metadata.witnessedTiming?.measuredWAVDurationSeconds)
             let repetitions = draft.evidence.boundaries.repetitions.map { boundary in

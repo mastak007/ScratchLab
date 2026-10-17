@@ -1,7 +1,7 @@
 ## Current explicit user task — Batch 5 and question-mark investigation, 18 October 2026
 
 - [x] Investigate question-mark causes and complete bounded Batch5 on installed c09ed21. Found16confidence-only omissions plus separate packet/noise-gate gaps. Controlled cursor/readout/inspection/modes/body/in/out/save-reopen-export and preservation PASS; identical product source permits reuse of Batch4 software/build receipts. Intel/recording-load/physical/audio/operator acceptance NOT RUN; bounded Intel checklist prepared. No product/threshold/projection edits. See docs/notation_batch5_findings_20261018.md.
-- [ ] Follow-up: correct visibility of confidence-only accepted telemetry separately from canonical eligibility and approved historical projections; proposal and continuation prompt in the findings document. Implementation not started.
+- [x] Correct confidence-only recorded-motion visibility with an explicit qualified display derivative; all16 supplied80/95 curves recovered with original confidence, true gaps/canonical evidence preserved. Focused12/full9510XCTest+1064namedSwiftTesting+123Python/all4builds PASS; signed universal install, bounded playback/modes/export/preservation and final legend check PASS. Physical/audio/Intel/operator acceptance NOT RUN. See docs/notation_confidence_visibility_20261018.md.
 
 ## Completed explicit user task — notation batches 2–4, 18 October 2026
 

@@ -6470,7 +6470,10 @@ struct SessionArchiveBuilder: Sendable {
             takeNumber: context.take.takeNumber, scratchType: context.notationDocument.scratchType,
             bpm: context.canonicalBPM, duration: context.take.duration,
             showBeatGrid: context.sidecar.sessionConfig?.referenceCaptureIntent?.isMovementCheck != true,
-            projection: evidence?.projection,
+            projection: evidence.map {
+                ReferenceRecordedMotionReview(canonical: $0.projection, review: $0.review,
+                    motion: ReferenceRecordedMotionReview.boundMotion(source: $0.sourceBinding)).displayProjection
+            },
             sourceIdentity: ExportArtifactIdentity.data(context.referenceTearEvidence?.data ?? Data()).sha256
                 + ":" + (try ExportSemanticIdentity.digest(context.sidecar)),
             beatsPerBar: context.sidecar.sessionConfig?.beatsPerBar ?? metadata.beatsPerBar,
