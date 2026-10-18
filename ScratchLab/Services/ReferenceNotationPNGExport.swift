@@ -50,7 +50,7 @@ enum ReferenceNotationPNGExport {
         // Internal derived-picture identity, not a stored capture/schema revision.
         // Old pictures must not be mistaken for this layout at identical bounds.
         private struct RenderIdentity: Encodable { let revision: Int; let request: Request }
-        var identity: String { get throws { try ExportSemanticIdentity.digest(RenderIdentity(revision: 3, request: self)) } }
+        var identity: String { get throws { try ExportSemanticIdentity.digest(RenderIdentity(revision: 4, request: self)) } }
 
         struct RepetitionEdge {
             let repetitionNumber: Int
@@ -87,9 +87,21 @@ enum ReferenceNotationPNGExport {
             }
         }
 
-        /// Whole bars for timed takes, never less than four seconds per row.
-        /// The lower bound also preserves the bounded 450-page allocation limit.
+        /// Short beatless checks compare a complete hand movement, including its
+        /// return, on one affine scale. Bound the full-width view to 16 seconds so
+        /// longer captures keep the existing readable, bounded pagination.
+        var showsCompleteMovementCheck: Bool { !showBeatGrid && duration <= 16 }
+        var chartHeight: CGFloat { showsCompleteMovementCheck ? 900 : ReferenceNotationPNGExport.chartHeight }
+        var scaleDescription: String {
+            showsCompleteMovementCheck
+                ? "Complete movement check · One fixed linear height scale throughout. Steeper slopes mean faster movement."
+                : "Same time scale on every row. Each row has its own fixed linear height scale: compare slopes within a row, not across rows."
+        }
+
+        /// Whole bars for timed takes; short movement checks remain uninterrupted.
+        /// Longer captures retain the bounded 450-page allocation limit.
         var rowDuration: Double {
+            if showsCompleteMovementCheck { return duration }
             guard showBeatGrid else { return secondsPerRow }
             let barDuration = Double(beatsPerBar) * 60 / Double(bpm)
             return max(secondsPerRow, ceil(secondsPerRow / barDuration) * barDuration)
@@ -223,9 +235,9 @@ private struct ReferenceNotationPNGPage: View {
                                 beatTimelineOffsetSeconds: request.beatTimelineOffsetSeconds,
                                 mixerFaders: projection.mixerFaders, showsMixerFaderLanes: true, reviewDetail: true,
                                 backgroundColor: .clear)
-                                .frame(width: width / scale, height: ReferenceNotationPNGExport.chartHeight / scale)
+                                .frame(width: width / scale, height: request.chartHeight / scale)
                                 .scaleEffect(scale, anchor: .topLeading)
-                                .frame(width: width, height: ReferenceNotationPNGExport.chartHeight, alignment: .topLeading)
+                                .frame(width: width, height: request.chartHeight, alignment: .topLeading)
                                 .overlay {
                                     Canvas { context, size in
                                         for edge in request.repetitionEdges(in: range) {
@@ -239,17 +251,17 @@ private struct ReferenceNotationPNGPage: View {
                                 }
                                 .clipped()
                         }
-                        .frame(height: ReferenceNotationPNGExport.chartHeight)
+                        .frame(height: request.chartHeight)
                     } else {
                         Text("MOTION UNKNOWN — no saved canonical notation available")
-                            .foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: ReferenceNotationPNGExport.chartHeight)
+                            .foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: request.chartHeight)
                     }
                 }
             }
             Spacer(minLength: 0)
             Text(ReferenceRecordedMotionReview.explanation)
             Text("Dim/dashed platter = fader closed · Grey gaps = unknown motion · Separate fader lanes retain recorded controls")
-            Text("Same time scale on every row. Each row has its own fixed linear height scale: compare slopes within a row, not across rows.")
+            Text(request.scaleDescription)
             Text("Gold lines = saved repetition in (solid) / out (dashed). Blank space after the final row is outside the recording.")
             Text("Measured curves retain their original timing and shape. Visual reference only; not calibration, approval or training data.")
             Text("Motion gaps and confidence details are retained in the accompanying notation JSON.")

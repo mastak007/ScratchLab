@@ -2411,6 +2411,72 @@ final class ReferenceNotationPNGTests: XCTestCase {
         XCTAssertThrowsError(try request(duration: 3601))
     }
 
+    func testShortMovementChecksKeepEveryStrokeTogetherOnOneScale() throws {
+        for duration in [0.5, 7.99, 8, 10.03451247165533, 16] {
+            let r = try request(duration: duration)
+            XCTAssertEqual(r.pageRanges, [[0...duration]],
+                "A short movement check must not split a slow forward stroke from its sharp return")
+            XCTAssertEqual(r.widthFraction(for: 0...duration), 1, accuracy: 1e-12)
+            XCTAssertEqual(r.chartHeight, 900)
+            XCTAssertTrue(r.scaleDescription.contains("One fixed linear height scale throughout"))
+        }
+        let timed = try ReferenceNotationPNGExport.Request(performer: "DJ", sessionID: "session",
+            takeID: "take", takeNumber: 1, scratchType: "Baby", bpm: 95, duration: 10,
+            showBeatGrid: true, projection: nil, sourceIdentity: "fixture")
+        XCTAssertFalse(timed.showsCompleteMovementCheck)
+        XCTAssertEqual(timed.chartHeight, 440)
+        let longer = try request(duration: 16.01)
+        XCTAssertEqual(longer.pageRanges.flatMap { $0 }.count, 5,
+            "Keep the existing bounded pagination for longer captures")
+    }
+
+    func testSuppliedShort95ExportKeepsSlowForwardAndSharpReturnTogether() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let evidencePath = env["SL_SHORT95_EVIDENCE_PATH"],
+              let metadataPath = env["SL_SHORT95_METADATA_PATH"],
+              let directory = env["SL_SHORT95_RENDER_DIRECTORY"] else {
+            throw XCTSkip("Supply the short 84BDB91F movement-check evidence and session metadata.")
+        }
+        let bytes = try Data(contentsOf: URL(fileURLWithPath: evidencePath))
+        let metadataBytes = try Data(contentsOf: URL(fileURLWithPath: metadataPath))
+        struct Metadata: Decodable {
+            struct Session: Decodable { let totalDurationSeconds: Double }
+            let session: Session
+        }
+        let duration = try JSONDecoder().decode(Metadata.self, from: metadataBytes).session.totalDurationSeconds
+        let saved = try ReferenceTearEvidenceCodec.decodeDocument(bytes)
+        let projection = ReferenceRecordedMotionReview(canonical: saved.projection, review: saved.review,
+            motion: ReferenceRecordedMotionReview.boundMotion(source: saved.sourceBinding)).displayProjection
+        let r = try request(duration: duration, projection: projection)
+        XCTAssertEqual(r.pageRanges, [[0...duration]])
+        let forward = try XCTUnwrap(saved.review.rawMovementEvents.first { abs($0.startTime - 2.3443916176765924) < 1e-9 })
+        let backward = try XCTUnwrap(saved.review.rawMovementEvents.first { abs($0.startTime - forward.endTime) < 1e-9 })
+        let pairRange = forward.startTime...backward.endTime
+        XCTAssertEqual(r.pageRanges.flatMap { $0 }.filter {
+            $0.lowerBound <= pairRange.lowerBound && $0.upperBound >= pairRange.upperBound
+        }.count, 1, "The actual forward/return pair needs one common chart frame")
+        let frame = try XCTUnwrap(r.frame(for: 0...duration))
+        let geometry = ScratchStrokeGeometry.canonicalGeometry(records: projection.records, layer: .performance, frame: frame)
+        let fTravel = abs(Double(geometry.motion.position(at: forward.endTime) - geometry.motion.position(at: forward.startTime)))
+        let bTravel = abs(Double(geometry.motion.position(at: backward.endTime) - geometry.motion.position(at: backward.startTime)))
+        let speedRatio = (bTravel / (backward.endTime - backward.startTime)) / (fTravel / (forward.endTime - forward.startTime))
+        XCTAssertEqual(speedRatio, 6.872241255315548, accuracy: 1e-6,
+            "One affine frame must retain the recorded slow/fast asymmetry")
+        XCTAssertEqual(projection.records.filter {
+            $0.evidence.observation.reason == ReferenceRecordedMotionReview.uncertaintyReason
+        }.count, 12)
+        XCTAssertFalse(geometry.missingMotion.isEmpty, "Real uncertainty cannot be filled to improve the picture")
+        XCTAssertEqual(r.projection, projection)
+        let folder = URL(fileURLWithPath: directory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let png = try ReferenceNotationPNGExport.render(r, page: 0)
+        _ = try ReferenceNotationPNGExport.probe(png)
+        try png.write(to: folder.appendingPathComponent("short95-complete-take.png"))
+        XCTAssertEqual(png, try ReferenceNotationPNGExport.render(r, page: 0))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: evidencePath)), bytes)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: metadataPath)), metadataBytes)
+    }
+
     func testExportRowsEnlargeSmallPhysicalTravelAndRejectLegacyPreviewIdentity() throws {
         typealias Record = ScratchNotation.GestureRecord
         let evidence = Record.Evidence(provenance: .measured,
@@ -2423,8 +2489,8 @@ final class ReferenceNotationPNGTests: XCTestCase {
         let projection = ReferenceTearCanonicalProjection(records: [curve], timeRange: 0...10,
             positionRange: 0...1, coordinateSpace: .normalizedTakeLocalDisplacement, reasons: [])
         let r = try request(duration: 10, projection: projection)
-        XCTAssertEqual(r.pageRanges, [[0...4, 4...8], [8...10]], "Make room for readable physical lanes")
-        let frame = try XCTUnwrap(r.frame(for: 0...4))
+        XCTAssertEqual(r.pageRanges, [[0...10]], "Keep the complete short movement check together")
+        let frame = try XCTUnwrap(r.frame(for: 0...10))
         XCTAssertEqual(frame.positionRange.lowerBound, -0.0025, accuracy: 1e-12)
         XCTAssertEqual(frame.positionRange.upperBound, 0.0225, accuracy: 1e-12)
         XCTAssertEqual(frame.coordinateSpace, .normalizedTakeLocalDisplacement)

@@ -1,3 +1,7 @@
+## Current explicit user task — short movement-check export, 18 October 2026
+
+- [x] Keep short beatless movement checks up to16seconds together in one tall fixed-scale export panel. Actual84BDB91F forward/return retained. Focused22/full9514XCTest+1064SwiftTesting+123Python/all4builds PASS; signed universal Mac installed, native Save Capture one-page export and original evidence preservation PASS. Physical/Intel/operator acceptance NOT RUN. See docs/notation_short_movement_export_20261018.md.
+
 ## Current explicit user task — Batch 5 and question-mark investigation, 18 October 2026
 
 - [x] Investigate question-mark causes and complete bounded Batch5 on installed c09ed21. Found16confidence-only omissions plus separate packet/noise-gate gaps. Controlled cursor/readout/inspection/modes/body/in/out/save-reopen-export and preservation PASS; identical product source permits reuse of Batch4 software/build receipts. Intel/recording-load/physical/audio/operator acceptance NOT RUN; bounded Intel checklist prepared. No product/threshold/projection edits. See docs/notation_batch5_findings_20261018.md.
