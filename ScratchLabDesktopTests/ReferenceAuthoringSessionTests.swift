@@ -1389,6 +1389,125 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
         XCTAssertEqual(session.takes, before)
     }
 
+    func testPerformedCountPreservesPlanAndRestoresExcludedTrims() throws {
+        var session = try makeFinalizedSession()
+        session.adjustRepetitionBoundary(repetitionIndex: 3, startBeat: 16.25, endBeat: 19.75)
+        XCTAssertTrue(session.markPreferredRepetition(3))
+        let before = try XCTUnwrap(session.takeInReview)
+        XCTAssertTrue(session.setPerformedRepetitionCount(3))
+        let after = try XCTUnwrap(session.takeInReview)
+        XCTAssertEqual(after.evidence.metadata, before.evidence.metadata)
+        XCTAssertEqual(after.evidence.boundaries.repetitions, Array(before.evidence.boundaries.repetitions.prefix(3)))
+        XCTAssertEqual(after.evidence.boundaries.unperformedRepetitions, Array(before.evidence.boundaries.repetitions.suffix(1)))
+        XCTAssertNil(after.preferenceMark)
+        XCTAssertNil(after.evidence.boundaries.selectedRepetitionIndex)
+        XCTAssertEqual(after.tearEvidenceSourceBinding, before.tearEvidenceSourceBinding)
+        XCTAssertEqual(after.tearProjection, before.tearProjection)
+        XCTAssertFalse(session.setPerformedRepetitionCount(0))
+        XCTAssertFalse(session.setPerformedRepetitionCount(5))
+        XCTAssertEqual(session.takeInReview, after)
+        XCTAssertTrue(session.setPerformedRepetitionCount(4))
+        XCTAssertEqual(session.takeInReview?.evidence.boundaries.repetitions, before.evidence.boundaries.repetitions)
+        XCTAssertNil(session.takeInReview?.evidence.boundaries.unperformedRepetitions)
+    }
+
+    func testPerformedCountRequiresExplicitExclusionsAndRetainsOtherValidation() throws {
+        var session = try makeFinalizedSession()
+        session.adjustRepetitionBoundary(repetitionIndex: 2, startBeat: 12, endBeat: 19)
+        XCTAssertTrue(session.markPreferredRepetition(0))
+        let before = try XCTUnwrap(session.takeInReview).evidence
+        func overlaps(_ evidence: ReferenceTakeEvidence) -> Bool {
+            ReferenceValidator.validate(evidence).findings.contains {
+                if case .repetitionBoundariesInconsistent(let detail) = $0 { return detail.contains("starts before") }
+                return false
+            }
+        }
+        XCTAssertTrue(overlaps(before))
+        XCTAssertTrue(session.setPerformedRepetitionCount(3))
+        let after = try XCTUnwrap(session.takeInReview).evidence
+        XCTAssertFalse(overlaps(after))
+        XCTAssertEqual(after.boundaries.selectedRepetitionIndex, 0)
+        var malformed = after
+        malformed.boundaries.unperformedRepetitions = nil
+        XCTAssertTrue(ReferenceValidator.validate(malformed).findings.contains {
+            if case .repetitionBoundariesInconsistent = $0 { return true }; return false
+        })
+        malformed.boundaries.unperformedRepetitions = [after.boundaries.repetitions[0]]
+        XCTAssertTrue(ReferenceValidator.validate(malformed).findings.contains {
+            if case .repetitionBoundariesInconsistent = $0 { return true }; return false
+        })
+        let encoded = try JSONEncoder().encode(after)
+        XCTAssertEqual(try JSONDecoder().decode(ReferenceTakeEvidence.self, from: encoded), after)
+        let legacy = try JSONEncoder().encode(before.boundaries)
+        XCTAssertFalse(String(decoding: legacy, as: UTF8.self).contains("unperformedRepetitions"))
+        XCTAssertNil(try JSONDecoder().decode(ReferencePhraseBoundaries.self, from: legacy).unperformedRepetitions)
+    }
+
+    func testPerformedCountCannotEditApprovedTake() throws {
+        var session = try reviewedSessionWithPendingWatch()
+        session.updateWatchEvidenceForTakeInReview(.linked(motionFileName: "scratch-motion.json"))
+        session.selectRepetitionForApproval(0)
+        try session.approveTakeInReview(notes: "Fixture approval")
+        let before = session.takes
+        XCTAssertFalse(session.setPerformedRepetitionCount(3))
+        XCTAssertEqual(session.takes, before)
+    }
+
+    func testPerformedCountSavedMarchesRegression() throws {
+        guard let path = ProcessInfo.processInfo.environment["SL_MARCHES_DRAFT_PATH"] else {
+            throw XCTSkip("Supply the original Marches draft payload for the saved-take regression.")
+        }
+        let bytes = try Data(contentsOf: URL(fileURLWithPath: path))
+        let original = try JSONDecoder().decode(ReferenceSavedDraft.self, from: bytes)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let mediaDirectory = directory.appendingPathComponent("media")
+        try FileManager.default.createDirectory(at: mediaDirectory, withIntermediateDirectories: true)
+        for (key, name) in [("SL_MARCHES_MOV_PATH", original.mediaURL.lastPathComponent),
+                            ("SL_MARCHES_WAV_PATH", original.mediaURL.deletingPathExtension().appendingPathExtension("wav").lastPathComponent)] {
+            let input = try XCTUnwrap(ProcessInfo.processInfo.environment[key])
+            try FileManager.default.copyItem(at: URL(fileURLWithPath: input), to: mediaDirectory.appendingPathComponent(name))
+        }
+        let draft = ReferenceSavedDraft(schemaVersion: original.schemaVersion, savedAt: original.savedAt,
+            mediaURL: mediaDirectory.appendingPathComponent(original.mediaURL.lastPathComponent),
+            sidecarURL: mediaDirectory.appendingPathComponent(original.sidecarURL.lastPathComponent),
+            evidence: original.evidence, autoDetectedTechnique: original.autoDetectedTechnique,
+            sourceBinding: original.sourceBinding, tearReview: original.tearReview, projection: original.projection,
+            performedLimitations: original.performedLimitations, reviewNotes: original.reviewNotes,
+            artifacts: original.artifacts.map { .init(url: mediaDirectory.appendingPathComponent($0.url.lastPathComponent), sha256: $0.sha256) },
+            preferenceMark: original.preferenceMark)
+        XCTAssertEqual(draft.sourceBinding.capturedSessionID, "11952a23-c619-42a7-9ac1-f56c5a1395b2")
+        XCTAssertEqual(draft.sourceBinding.capturedTakeID, "take-002")
+        var session = try ReferenceAuthoringSession(reviewing: draft, operatorName: "Fixture reviewer")
+        XCTAssertTrue(session.setPerformedRepetitionCount(3))
+        let take = try XCTUnwrap(session.takeInReview)
+        let report = ReferenceValidator.validate(take.evidence)
+        XCTAssertFalse(report.findings.contains {
+            if case .repetitionBoundariesInconsistent = $0 { return true }; return false
+        })
+        XCTAssertTrue(report.findings.contains(.mixerFaderEvidenceInvalid(
+            detail: "CROSSFADER has an unobserved interval in repetition 1.")))
+        XCTAssertEqual(take.evidence.metadata, draft.evidence.metadata)
+        XCTAssertEqual(take.tearEvidenceSourceBinding, draft.sourceBinding)
+        XCTAssertEqual(take.evidence.boundaries.repetitions.count, 3)
+        XCTAssertEqual(take.evidence.boundaries.unperformedRepetitions?.first?.startBeat, 28)
+        let store = ReferenceDraftStore(directory: directory.appendingPathComponent("drafts"))
+        _ = try store.save(take: take, mediaURL: draft.mediaURL, reviewNotes: draft.reviewNotes)
+        let reopened = try ReferenceDraftStore(directory: store.directory).load(id: draft.id)
+        XCTAssertEqual(reopened.evidence, take.evidence)
+        XCTAssertEqual(reopened.artifacts, draft.artifacts)
+        let document = try XCTUnwrap(ReferenceReviewMetadataCodec.makeDocument(evidence: take.evidence,
+            preferenceMark: take.preferenceMark, reviewNotes: draft.reviewNotes, sourceBinding: draft.sourceBinding,
+            originalMedia: draft.artifacts.map { .init(fileName: $0.url.lastPathComponent, sha256: $0.sha256) }))
+        let decoded = try ReferenceReviewMetadataCodec.decodeDocument(ReferenceReviewMetadataCodec.encode(document))
+        XCTAssertEqual(decoded.recordedRepetitions.count, 3)
+        XCTAssertEqual(decoded.unperformedRepetitions?.count, 1)
+        XCTAssertEqual(decoded.sourceBinding, draft.sourceBinding)
+        XCTAssertEqual(decoded.preferredRepetition?.repetitionNumber, 1)
+        XCTAssertEqual(decoded.lifecycleStateAtExport, .draft)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), bytes)
+    }
+
     func testBoundaryOnlyReviewMetadataRoundTripsWithoutPreferenceNotesOrApproval() throws {
         let session = try reviewedSessionWithPendingWatch()
         var evidence = try XCTUnwrap(session.takeInReview).evidence

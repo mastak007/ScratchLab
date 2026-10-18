@@ -638,6 +638,17 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
         }
     }
 
+    func setPerformedRepetitionCount(_ count: Int, expectedTakeID: String) async -> ReferenceAuthoringWorkerUpdate {
+        await enqueue { worker in
+            guard worker.session.takeInReview?.id == expectedTakeID else { return worker.makeUpdate() }
+            guard worker.session.setPerformedRepetitionCount(count) else {
+                return worker.makeUpdate(errorMessage: "Choose a performed count within this take's original plan.")
+            }
+            worker.session.revalidateTakeInReview()
+            return worker.makeUpdate()
+        }
+    }
+
     func selectRepetitionForApproval(_ repetitionIndex: Int) async -> ReferenceAuthoringWorkerUpdate {
         await enqueue { worker in
             worker.session.selectRepetitionForApproval(repetitionIndex)
@@ -1968,6 +1979,17 @@ final class ReferenceAuthoringViewModel: ObservableObject {
                 endBeat: endBeat,
                 expectedTakeID: takeID
             ))
+        }
+    }
+
+    func setPerformedRepetitionCount(_ count: Int) {
+        guard canEditReviewedTake, let takeID = session.takeInReview?.id else { return }
+        if mediaReview.state != .loading { mediaReview.stop() }
+        isWorking = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { isWorking = false }
+            apply(await worker.setPerformedRepetitionCount(count, expectedTakeID: takeID))
         }
     }
 

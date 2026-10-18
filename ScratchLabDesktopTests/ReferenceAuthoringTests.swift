@@ -1346,6 +1346,92 @@ final class ReferenceAuthoringTests: XCTestCase {
         XCTAssertNil(ReferenceMediaTimeRange.clamped(start: -3, end: -1, duration: 6))
     }
 
+    func testSelectedAudioCropFinalizesBufferedStereoTail() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceURL = root.appendingPathComponent("stereo.wav")
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 220_000))
+        buffer.frameLength = 220_000
+        for channel in 0..<2 {
+            let samples = try XCTUnwrap(buffer.floatChannelData?[channel])
+            for frame in 0..<Int(buffer.frameLength) {
+                samples[frame] = Float((frame * (channel + 1)) % 251 - 125) / 256
+            }
+        }
+        try autoreleasepool {
+            let file = try AVAudioFile(forWriting: sourceURL, settings: format.settings)
+            try file.write(from: buffer)
+            if #available(macOS 15.0, *) { file.close() }
+        }
+        let original = try Data(contentsOf: sourceURL)
+        // A short tail must not disappear, be padded, or be rejected because
+        // the writer has not yet flushed a complete internal buffer.
+        for frames in [Int64(1), 4_095, 4_096, 4_097, 188_006] {
+            try assertSelectedAudioFrames(sourceURL: sourceURL,
+                destinationURL: root.appendingPathComponent("selected-\(frames).wav"),
+                startSeconds: 19_865.0 / 44_100,
+                endSeconds: Double(19_865 + frames) / 44_100,
+                expectedStartFrame: 19_865, expectedFrames: frames)
+        }
+        XCTAssertEqual(try Data(contentsOf: sourceURL), original)
+    }
+
+    func testSelectedAudioCropPreservesApprovedMarchesSamples() throws {
+        guard let path = ProcessInfo.processInfo.environment["SL_MARCHES_WAV_PATH"] else {
+            throw XCTSkip("Set SL_MARCHES_WAV_PATH to the preserved Marches take002 WAV.")
+        }
+        let sourceURL = URL(fileURLWithPath: path)
+        let original = try Data(contentsOf: sourceURL)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try assertSelectedAudioFrames(sourceURL: sourceURL,
+            destinationURL: root.appendingPathComponent("marches-reference.wav"),
+            startSeconds: 0.4504643141676512, endSeconds: 4.713622208904493,
+            expectedStartFrame: 19_865, expectedFrames: 188_006)
+        XCTAssertEqual(try Data(contentsOf: sourceURL), original)
+    }
+
+    private func assertSelectedAudioFrames(
+        sourceURL: URL, destinationURL: URL, startSeconds: Double, endSeconds: Double,
+        expectedStartFrame: Int64, expectedFrames: Int64
+    ) throws {
+        let range = try ReferenceApprovedPackageCoordinator.extractSelectedAudio(
+            sourceURL: sourceURL, destinationURL: destinationURL,
+            startSeconds: startSeconds, endSeconds: endSeconds)
+        let source = try AVAudioFile(forReading: sourceURL)
+        let selected = try AVAudioFile(forReading: destinationURL)
+        XCTAssertEqual(selected.length, expectedFrames)
+        XCTAssertEqual(selected.processingFormat.sampleRate, source.processingFormat.sampleRate)
+        XCTAssertEqual(selected.processingFormat.channelCount, source.processingFormat.channelCount)
+        XCTAssertEqual(range.lowerBound, Double(expectedStartFrame) / source.processingFormat.sampleRate)
+        XCTAssertEqual(range.upperBound, Double(expectedStartFrame + expectedFrames) / source.processingFormat.sampleRate)
+        source.framePosition = expectedStartFrame
+        func samples(_ file: AVAudioFile) throws -> [Data] {
+            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 16_384))
+            var channels = Array(repeating: Data(), count: Int(file.processingFormat.channelCount))
+            var read: Int64 = 0
+            while read < expectedFrames {
+                try file.read(into: buffer, frameCount: AVAudioFrameCount(min(expectedFrames - read, 16_384)))
+                guard buffer.frameLength > 0 else {
+                    XCTFail("Selected audio ended before the expected sample count")
+                    break
+                }
+                for channel in channels.indices {
+                    let values = try XCTUnwrap(buffer.floatChannelData?[channel])
+                    channels[channel].append(Data(bytes: values, count: Int(buffer.frameLength) * MemoryLayout<Float>.size))
+                }
+                read += Int64(buffer.frameLength)
+            }
+            XCTAssertEqual(read, expectedFrames)
+            return channels
+        }
+        XCTAssertEqual(try samples(selected), try samples(source),
+            "Every selected sample in both channels must match the original, including the final partial buffer.")
+    }
+
     private func goodAudio(fileName: String = "reference.wav") -> ReferenceArtifactMeasurement {
         ReferenceArtifactMeasurement(
             fileName: fileName,

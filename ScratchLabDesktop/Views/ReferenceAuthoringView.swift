@@ -1524,6 +1524,8 @@ struct ReferenceAuthoringView: View {
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
                 }
+                Text("Before Record, move the crossfader and right channel fader once, then set their starting positions. The app needs an observed position for both controls; a stationary control after launch may still be unknown.")
+                    .font(.caption).foregroundStyle(.secondary)
                 framingContent
                 if viewModel.session.confirmedCalibration == nil {
                     Text("Check Calibration in Live preflight before recording. A matching saved calibration is adopted when the take starts. An older take with unknown fader evidence cannot be repaired by calibrating afterward.")
@@ -1652,8 +1654,21 @@ struct ReferenceAuthoringView: View {
                         Text("Use Play whole take to review this movement. Save Capture exports the recorded files. No timed repetitions or canonical approval are assigned to this check.")
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
-                    Text("Four repetitions").font(.headline)
-                    Text("Play each repetition to check it. Start and End beat trim its review range. Mark as Preferred records the performer's best repetition (1–4); it is saved with the draft, included in Save Capture and used if you approve. Change your pick by marking another repetition, or use Clear. Marking does not approve the take or change the original recording.")
+                    Text("Repetitions").font(.headline)
+                    Picker("Performed repetitions", selection: Binding(
+                        get: { take.evidence.boundaries.repetitions.count },
+                        set: { viewModel.setPerformedRepetitionCount($0) }
+                    )) {
+                        ForEach(1...max(1, take.evidence.metadata.repetitionCount), id: \.self) { count in
+                            Text("\(count)").tag(count)
+                        }
+                    }
+                    .frame(maxWidth: 280)
+                    .disabled(!viewModel.canEditReviewedTake || exportCoordinator.isPreparing)
+                    .accessibilityIdentifier("cxl.review.performedRepetitionCount")
+                    Text("Recorded plan: \(take.evidence.metadata.repetitionCount) repetitions. Lowering the performed count excludes trailing rows; increasing it restores their saved bounds. Original media is unchanged.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("Play each repetition to check it. Start and End beat trim its review range. Mark as Preferred records the performer's best performed repetition; it is saved with the draft, included in Save Capture and used if you approve. Change your pick by marking another repetition, or use Clear. Marking does not approve the take or change the original recording.")
                         .font(.caption).foregroundStyle(.secondary)
                     if let preferred = take.evidence.boundaries.selectedRepetitionIndex {
                         Text("Preferred: repetition \(preferred + 1)" + (take.preferenceMark.map {

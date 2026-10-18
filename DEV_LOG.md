@@ -7762,3 +7762,43 @@ Protected baseline:62pre-existing review files,11previous Applications copies, o
 ## 18 October2026 — short movement-check export completed
 
 Selected explicit next repair for84BDB91F. Two product/test files plus workflow/report; details in docs/notation_short_movement_export_20261018.md. Four-second rows split slowforward/sharpreturn and changed relative row scale. Beatless<=16s now one900point panel with fixed affine scale; all original timing/shape/evidence retained. Focused22PASS; full9514XCTest,1064namedSwiftTesting,123Python,124optional skips,120selectors twice,45renders and all4platform buildsPASS. Signed universal installed/open, actualnativeSaveCaptureonePNG/sixartifacthashes/rawmedia/canonical/sessionmetadata preserved.62originalreviews/11oldapps/demo unchanged. Observer corrected for existing movement-check artifact contract; no product/gate changes. Physical/audio/Intel/operator acceptanceNOTRUN. Checkpoint see externalGIT-RECEIPT.json; no new fullrun for docs.
+
+
+## 18 October 2026 — performed repetitions repair in progress
+
+Karl confirms three Marches repetitions. Existing review forces four; saved repetition3=31.5–40 and unused row4=28–36 overlap. Separate selected repetition1 starts0.215401seconds before first crossfader observation; right-channel held state is valid. Add explicit optional trailing unperformed ranges to shared review boundaries and export companion, preserving immutable planned count and raw sidecar. Session count setter retains trims/restores rows/clears excluded preference and refuses invalid counts or approved takes. Worker uses current take identity and existing serialized persistence. Mac picker edits performed prefix; fixed pre-record guidance asks for observed fader positions. Missing mixer data remains blocking. Actual source ZIP hashes verified in marches-D768C562-audit. Tests and installation pending; no completed/hardware claim. Runtime /private/tmp/sl-performed-repetitions-20261018; canonical source221f4e0, protected untracked demo unchanged. An initial three-line edit in older Downloads checkout was exactly removed; no residual change there.
+
+
+## 19 October 2026 — performed repetitions repair completed
+
+Six product/test files and four workflow files changed; full list and implementation in /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-18/performed-repetitions/REPORT.md. Focused 12 PASS. Full scripts/build.sh all PASS: 9,522 XCTest, 1,064 named Swift Testing, 123 Python; 124 optional skips, zero failures; 124 required selectors twice and all four platform builds. Signed universal app installed separately, SHA 2d722944f96337c6a9ba27c6f1bb61e686e18a4e5c3ab308b5386114edb54bb4. Native count 4→3→4→3 preserves exact trims, preference and original plan; relaunch retains three. Actual Save Capture ZIP verifies 28 artifact entries and unchanged original media/source/canonical evidence. Six original drafts backed up; other five and protected demo unchanged. Marches take6 left open at count3; actual initial 0.215401s crossfader gap remains blocking for preferred1. No automatic trim/approval, physical/audio/Intel/operator acceptance. No further code changes or full run needed. Source left uncommitted.
+
+
+## 19 October 2026 — approved audio finalization repair started
+
+Selected explicit user task: fix missing approved Marches package. Actual reproduction copied188006 frames but pre-close writer position184320; reopened WAV188006. Coordinator now checks finalized file length, rate and channels; exact-copy/read checks retained. Added deterministic stereo-tail and actual Marches sample-identity regressions in ReferenceAuthoringTests. No metadata, selection, approval, input media or schema edits. Verification in progress under /private/tmp/sl-approved-audio-finalization-20261019; evidence /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-19/approved-audio-finalization. Full export gate required. Existing performed-repetition work preserved.
+
+
+# Approved audio finalization — completed 19 October 2026
+
+Root cause: AVAudioFile.framePosition was checked before PCM buffering was flushed. Actual Marches requested/copied188006 frames, but pre-close position184320; finalized file had188006 exact frames. Code now verifies reopened finalized length/rate/channels; partial-read and copied-count checks remain. Original media, schema, timing, approval and preferred boundaries unchanged.
+
+Changed production file: ScratchLabDesktop/Services/ReferenceApprovedPackageCoordinator.swift. Added two regressions and shared exact-sample test helper in ScratchLabDesktopTests/ReferenceAuthoringTests.swift. Preserved preceding performed-repetition dirty changes and protected untracked demo.
+
+Verification: focused14 XCTest executions PASS/0skips/0failures. Full scripts/build.sh all PASS:9526 XCTest,124 existing optional skips,1064 named Swift Testing,123 Python;131 required selectors twice; iOS,macOS Release,macOS CXLRelease,watchOS PASS. Exact actual Marches and1/4095/4096/4097/188006-frame stereo tails checked. All supervisors reaped/no survivors. Signed DeveloperID universal staging, settings parity, bundle/team/permissions/signature and ZIP roundtrip PASS. No notarization or new hardware/Intel acceptance claimed.
+
+Installed/open: /Applications/SL Capture Approved Audio 2026-10-19.app
+Executable SHA256: 62d06ddd79d1effe1f5491c23ee8552de16e2bf4c748f04f375c826bdb462e96
+Native export: /Users/karlwatson/Downloads/SL Capture Demo Review - 2026-10-19/Marches - 95 BPM/marches.marches_2bar_v6
+User-approved repetition1 beats4.5–11.25, frames19865..<207871,188006frames,44100Hz stereo,4.263174603seconds. App exported and reopened/rehashed14artifacts. Every selected PCM byte equals original source. All12reviewdocuments and originalMOV/WAV/sidecar unchanged. Previous app preserved. Downloads README updated and receipt added.
+
+Verification setup notes: initial harness baseline path referred to prior app while hash referred to installed baseline; caught/corrected before any build with prior setup retained. First external manifest comparison expected draft numeric dates; existing package encoder uses ISO8601 whole seconds. Observer corrected to exact existing date-encoding contract, old observer retained; no product/approval change or gate waiver. One AX query syntax and one handler error corrected with fresh observed UI; export/reopen success messages and screenshot retained.
+
+No commit/push. Frozen source, patch, receipts and signed package retained here. Runtime: /private/tmp/sl-approved-audio-finalization-20261019. No further code repair required for this failure. Training/Learner integration not established by this export.
+
+
+## 19 October 2026 — Batch1 Capture checkpoint
+
+Selected explicit user task: checkpoint the completed performed-repetition and approved-audio finalization repairs, commit/push and stop. Inspected current branch/HEAD, dirty and staged scopes, existing chats/processes and remote baseline. No competing build was active. All756 tracked source/configuration/test/resource inputs matched the final verified snapshot except four workflow records. Rechecked focused/full/platform supervisor PASS receipts,131methods twice,9526XCTest/1064namedSwiftTesting/123Python, signed installed executable identity and14native Marches package artifact hashes. Reused unchanged gates; no source or build settings changed.
+
+Commit scope: ReferenceAuthoringSession.swift, ReferenceTake.swift, ReferenceValidation.swift, ReferenceApprovedPackageCoordinator.swift, ReferenceAuthoringViewModel.swift, ReferenceAuthoringView.swift, ReferenceAuthoringSessionTests.swift, ReferenceAuthoringTests.swift, plus TASKS.md, DEV_LOG.md and both handoffs. Current checkpoint edits touch only those four workflow files. Protected demo excluded and unchanged. No user capture, original approval/preference, media or Learner checkout changed. The remote branch matched local base221f4e0 before preparation. Diff and exact staged manifest checks required before commit; actual commit/push status and remote equality are recorded in /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-19/capture-batch1-checkpoint/GIT-RECEIPT.json. Batch2 remains a separate user-run step in the existing gamified chat. No new physical/training/release claim.

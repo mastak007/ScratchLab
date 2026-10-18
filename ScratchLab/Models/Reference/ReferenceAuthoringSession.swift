@@ -990,6 +990,27 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         takes[takeIndex].updateBoundaries(boundaries)
     }
 
+    /// Review a performed prefix of the original plan, preserving excluded trims.
+    @discardableResult
+    mutating func setPerformedRepetitionCount(_ count: Int) -> Bool {
+        guard case .reviewing(let takeIndex) = phase, takes.indices.contains(takeIndex) else { return false }
+        let take = takes[takeIndex]
+        let planned = take.evidence.metadata.repetitionCount
+        guard take.evidence.metadata.captureIntent?.isMovementCheck != true,
+              planned > 0, count >= 1, count <= planned else { return false }
+        var bounds = take.evidence.boundaries
+        let all = (bounds.repetitions + (bounds.unperformedRepetitions ?? [])).sorted { $0.index < $1.index }
+        guard all.count == planned, all.enumerated().allSatisfy({ $0.offset == $0.element.index }) else { return false }
+        bounds.repetitions = Array(all.prefix(count))
+        bounds.unperformedRepetitions = count == planned ? nil : Array(all.dropFirst(count))
+        if let selected = bounds.selectedRepetitionIndex, selected >= count {
+            bounds.selectedRepetitionIndex = nil
+            takes[takeIndex].preferenceMark = nil
+        }
+        takes[takeIndex].updateBoundaries(bounds)
+        return true
+    }
+
     /// Marks CXL's optional preferred repetition (zero-based `index`; the
     /// operator sees `index + 1`). This is the same single selection approval
     /// reads, but marking never approves, publishes, trims or changes

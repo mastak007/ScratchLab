@@ -1,3 +1,17 @@
+## Batch 1 — Capture source checkpoint, 19 October 2026
+
+- [x] Audit all756 tracked inputs, the exact12-file change scope, matching full/focused/build/install/export receipts, remote baseline and protected demo exclusion. Product source unchanged; passing gates reused.
+- Commit/push completion and exact local/remote HEAD are recorded in /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-19/capture-batch1-checkpoint/GIT-RECEIPT.json after the authorized operation; that receipt determines final checkpoint status.
+- Next: Batch2 read-only continuity/behaviour/reference audit in the existing gamified chat (GPT-6 Astra High). No Learner edits in Batch1.
+
+## Current explicit user task — approved audio finalization, 19 October 2026
+
+- [x] Fix approved Marches package export rejecting a complete buffered WAV. Closed-file frame/rate/channel validation and exact-sample regressions PASS; focused14/full9526 XCTest+1064 named Swift Testing+123 Python/all4builds PASS. Signed installation, native Marches export/reopen of14artifacts and original-sample identity PASS. Originals and approvals unchanged.
+
+## Current explicit user task — performed repetitions, 18 October 2026
+
+- [x] Support three performed repetitions within an unchanged four-repetition capture plan. Trailing exclusions are reversible and persist/export. Focused 12 passes; full 9,522 XCTest / 1,064 named Swift Testing / 123 Python and all four builds PASS. Signed universal app installed; native 4→3→4→3, relaunch and actual ZIP export PASS (28 artifact entries verified). Original media, plan and preference preserved. Initial crossfader gap remains unknown; no approval or physical acceptance claimed. See /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-18/performed-repetitions/REPORT.md.
+
 ## Current explicit user task — short movement-check export, 18 October 2026
 
 - [x] Keep short beatless movement checks up to16seconds together in one tall fixed-scale export panel. Actual84BDB91F forward/return retained. Focused22/full9514XCTest+1064SwiftTesting+123Python/all4builds PASS; signed universal Mac installed, native Save Capture one-page export and original evidence preservation PASS. Physical/Intel/operator acceptance NOT RUN. See docs/notation_short_movement_export_20261018.md.

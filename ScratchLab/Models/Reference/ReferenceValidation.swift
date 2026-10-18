@@ -977,12 +977,13 @@ enum ReferenceValidator {
         let metadata = evidence.metadata
         let repetitions = evidence.boundaries.repetitions.sorted { $0.index < $1.index }
 
-        if repetitions.count != metadata.repetitionCount {
-            findings.append(
-                .repetitionBoundariesInconsistent(
-                    detail: "\(repetitions.count) boundary set(s) for \(metadata.repetitionCount) declared repetition(s)."
-                )
-            )
+        let excluded = evidence.boundaries.unperformedRepetitions ?? []
+        let plannedRanges = repetitions + excluded
+        if repetitions.isEmpty || plannedRanges.count != metadata.repetitionCount
+            || !plannedRanges.enumerated().allSatisfy({ $0.offset == $0.element.index }) {
+            findings.append(.repetitionBoundariesInconsistent(
+                detail: "Performed and explicitly unperformed ranges must account for the original \(metadata.repetitionCount)-repetition plan in order."
+            ))
         }
 
         for repetition in repetitions {

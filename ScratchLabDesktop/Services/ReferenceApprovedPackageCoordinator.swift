@@ -224,10 +224,18 @@ enum ReferenceApprovedPackageCoordinator {
                 try destination.write(from: buffer)
                 copiedFrames += Int64(buffer.frameLength)
             }
-            guard copiedFrames == frames, destination.framePosition == frames else {
+            guard copiedFrames == frames else {
                 throw ReferencePackageIOError.couldNotCreatePackage("selected repetition frame count changed while writing")
             }
             if #available(macOS 15.0, *) { destination.close() }
+        }
+        // The writer's position can lag behind buffered PCM until close. Check
+        // the finalized file that will actually be hashed and packaged instead.
+        let finalized = try AVAudioFile(forReading: destinationURL)
+        guard finalized.length == frames,
+              finalized.processingFormat.sampleRate == sampleRate,
+              finalized.processingFormat.channelCount == source.processingFormat.channelCount else {
+            throw ReferencePackageIOError.couldNotCreatePackage("finalized selected repetition audio does not match its measured frames and format")
         }
         return (Double(start) / sampleRate)...(Double(end) / sampleRate)
     }

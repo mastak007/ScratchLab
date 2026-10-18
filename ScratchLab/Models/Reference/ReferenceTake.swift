@@ -1020,6 +1020,8 @@ struct ReferenceRepetitionBoundary: Codable, Equatable, Sendable, Identifiable {
 /// selection.
 struct ReferencePhraseBoundaries: Codable, Equatable, Sendable {
     var repetitions: [ReferenceRepetitionBoundary]
+    /// Explicit trailing exclusions retained for reversible review. The original plan is unchanged.
+    var unperformedRepetitions: [ReferenceRepetitionBoundary]? = nil
     /// Index of the repetition the operator approved. `nil` until they choose.
     var selectedRepetitionIndex: Int?
 
@@ -4035,6 +4037,8 @@ struct ReferenceReviewMetadataDocument: Codable, Equatable, Sendable {
     /// Hashes of the original recorded media at export (video, WAV, optional second camera).
     let originalMedia: [OriginalMedia]
     let recordedRepetitions: [Repetition]
+    /// Planned trailing ranges explicitly marked not performed during review.
+    var unperformedRepetitions: [Repetition]? = nil
     let preferredRepetition: Repetition?
     let preferenceMark: ReferenceRepetitionPreferenceMark?
     let reviewNotes: String
@@ -4086,7 +4090,9 @@ enum ReferenceReviewMetadataCodec {
             repetitionNumbering: Document.repetitionNumbering, sourceBinding: sourceBinding,
             referenceTakeID: metadata.referenceTakeID, authoringSessionID: metadata.authoringSessionID,
             isMovementCheck: isMovementCheck, lifecycleStateAtExport: metadata.lifecycleState,
-            originalMedia: originalMedia, recordedRepetitions: recorded, preferredRepetition: preferred,
+            originalMedia: originalMedia, recordedRepetitions: recorded,
+            unperformedRepetitions: evidence.boundaries.unperformedRepetitions?.map { repetition($0, metadata: metadata) },
+            preferredRepetition: preferred,
             preferenceMark: preferred == nil ? nil : preferenceMark, reviewNotes: notes)
         try validate(document)
         return document
@@ -4157,6 +4163,13 @@ enum ReferenceReviewMetadataCodec {
         guard recorded.enumerated().allSatisfy({ $0.offset == $0.element.repetitionIndex }),
               recorded.allSatisfy(isConsistent) else {
             throw Error.invalid("recorded repetitions are not contiguous zero-based ranges")
+        }
+        if let excluded = document.unperformedRepetitions {
+            guard !document.isMovementCheck, !recorded.isEmpty, !excluded.isEmpty,
+                  (recorded + excluded).enumerated().allSatisfy({ $0.offset == $0.element.repetitionIndex }),
+                  excluded.allSatisfy(isConsistent) else {
+                throw Error.invalid("unperformed repetitions must be the trailing planned ranges")
+            }
         }
         if document.isMovementCheck, !recorded.isEmpty || document.preferredRepetition != nil {
             throw Error.invalid("movement checks have no timed repetitions to prefer")
